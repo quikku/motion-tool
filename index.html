@@ -82,6 +82,9 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 3px 0; }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 70; }
 .modal.show { display: flex; }
+body.unity .alone { display: none; }
+#ask input { width: 440px; max-width: 80vw; }
+#ask .row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
 .modal .box { background: var(--panel); border: 1px solid #50545c; border-radius: 6px; padding: 12px 14px; min-width: 260px; max-width: 520px; }
 .modal .box h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
 .modal .box .list { display: flex; flex-direction: column; gap: 4px; }
@@ -110,11 +113,11 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <body>
 <div id="app">
   <div id="toolbar">
-    <button id="bModel" title="FBXを開く（テクスチャや.metaも一緒に選べる）">FBX</button>
-    <button id="bFolder" title="モデルのフォルダを開く">フォルダ</button>
-    <span class="sep"></span>
+    <button id="bModel" class="alone" title="FBXを開く（テクスチャや.metaも一緒に選べる）">FBX</button>
+    <button id="bFolder" class="alone" title="モデルのフォルダを開く">フォルダ</button>
+    <span class="sep alone"></span>
     <button id="bNew">新規</button>
-    <button id="bOpen" title="Ctrl+O">開く</button>
+    <button id="bOpen" class="alone" title="Ctrl+O">開く</button>
     <button id="bSave" title="Ctrl+S">保存</button>
     <button id="bSaveAs">別名で保存</button>
     <span class="sep"></span>
@@ -172,6 +175,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <div id="drop">ここに落とす</div>
 <div id="ctx" class="menu"></div>
 <div id="choose" class="modal"><div class="box"><h3></h3><div class="list"></div></div></div>
+<div id="ask" class="modal"><div class="box"><h3></h3><input type="text" spellcheck="false"><div class="row"><button class="no">やめる</button><button class="ok">OK</button></div></div></div>
 <div id="help" class="modal"><div class="box">
   <h3>操作</h3>
   <table id="helpTable"></table>
@@ -260,6 +264,8 @@ let M = null; // モデル
 const D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map() };
 let docVer = 0;
 const S = {
+  /** Unityから開いたとき: { path: 保存先の.anim（まだ無ければnull）, dir: 保存先の候補のフォルダ }。 */
+  unity: null,
   frame: 0, playing: false, playT: 0, sel: null, edited: new Set(), shapeEdited: new Set(), shapeSel: null, tab: 'bones',
   autoKey: true, ik: true, pin: false, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
   dirty: false, fileHandle: null, fileName: null, pendingJson: null,
@@ -286,7 +292,8 @@ window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault()
 const IMAGE_RE = /\.(png|jpe?g|tga|bmp|webp)$/i;
 const MISSING_TEX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
 
-async function loadModelFiles(files) {
+/** texByMat: マテリアル名（小文字）→ 画像。Unityから開いたときに渡される。無ければ、ファイルの中から探す。 */
+async function loadModelFiles(files, texByMat = null) {
   const fbxs = files.filter(f => /\.fbx$/i.test(f.name));
   if (!fbxs.length) return false;
   let fbx = fbxs[0];
@@ -334,7 +341,7 @@ async function loadModelFiles(files) {
   // FBXLoader は軸の設定（Z-up など）を見ないので、Unity と同じく Y-up・+Z 向きに回す
   group.quaternion.setFromRotationMatrix(axisConversion(readAxes(buffer)));
   if (loading) await Promise.race([done, new Promise(res => setTimeout(res, 4000))]);
-  const missing = fixMaterials(group, images, urls, await unityTextures(files, meta));
+  const missing = fixMaterials(group, images, urls, texByMat || await unityTextures(files, meta));
   setModel(group, fbx.name, meta, info);
   if (missing.length) setStatus($('status').textContent + `  テクスチャなし: ${missing.join(', ')}`);
   return true;
@@ -485,10 +492,21 @@ function setModel(group, name, meta, info = null) {
   scene.add(group);
   group.updateMatrixWorld(true);
 
+  const isBone = o => o.isBone && !(o.parent && o.parent.isBone && o.parent.ID === o.ID);
+  // 腰のすぐ上に「ルート」を1つ挟む（全体の移動・回転用）。FBXには無い物なので、書き出すときは骨として数えない。
+  // 動くのは腰から下だけ。UnityのHumanoidの再生も腰から下しか動かさないので、見た目がそろう
+  const rootNode = new THREE.Group();
+  {
+    const list = [];
+    group.traverse(o => { if (isBone(o)) list.push(o); });
+    const hips = findHipsObject(list, meta, info && info.model === name ? info : null);
+    if (hips) { hips.parent.add(rootNode); rootNode.add(hips); }
+  }
   const bones = [];
-  group.traverse(o => { if (o.isBone && !(o.parent && o.parent.isBone && o.parent.ID === o.ID)) bones.push(o); });
+  group.traverse(o => { if (isBone(o) || o === rootNode) bones.push(o); });
   const index = new Map(bones.map((b, i) => [b, i]));
-  const names = bones.map(b => b.userData.originalName || b.name);
+  const names = bones.map(b => (b === rootNode ? '' : b.userData.originalName || b.name));
+  if (index.has(rootNode)) names[index.get(rootNode)] = names.includes(ROOT_NAME) ? ROOT_NAME + '*' : ROOT_NAME;
   const byName = new Map();
   names.forEach((n, i) => { if (!byName.has(n)) byName.set(n, i); });
   const parent = bones.map(b => { for (let p = b.parent; p; p = p.parent) if (index.has(p)) return index.get(p); return -1; });
@@ -510,7 +528,7 @@ function setModel(group, name, meta, info = null) {
   }
 
   M = {
-    root: group, name, bones, index, names, byName, parent, depth, children, meshes,
+    root: group, name, bones, index, names, byName, parent, depth, children, meshes, rootBone: index.get(rootNode) ?? -1,
     shapes, shapeById: new Map(shapes.map(x => [x.id, x])), shapeIndex: new Map(shapes.map((x, k) => [x.id, k])),
     restQ: bones.map(b => b.quaternion.clone()),
     restP: bones.map(b => b.position.clone()),
@@ -549,6 +567,23 @@ function setModel(group, name, meta, info = null) {
     S.pendingJson = null;
     applyMotionJson(p.obj, p.name, p.handle);
   }
+}
+
+const ROOT_NAME = 'ルート';
+/** 位置のキーを持つ骨（腰とルート）。ほかの骨は回転だけ。 */
+const hasPos = i => i === M.hips || i === M.rootBone;
+
+/** ルートを挟む相手（腰）を、骨の一覧ができる前に決める。.meta → モデルの情報 → 名前の順。 */
+function findHipsObject(list, meta, info) {
+  if (!list.length) return null;
+  const names = list.map(b => b.userData.originalName || b.name);
+  const pick = n => (names.includes(n) ? list[names.indexOf(n)] : null);
+  const unquote = t => t.replace(/^['"]|['"]$/g, '');
+  const m = meta && /-\s*boneName:\s*(.+?)\s*\r?\n\s*humanName:\s*Hips\s*\r?\n/.exec(meta);
+  const fromInfo = info && Array.isArray(info.human) && info.human.find(t => t.startsWith('Hips:'));
+  return (m && pick(unquote(m[1]))) || (fromInfo && pick(fromInfo.slice(5)))
+    || list[names.findIndex(n => /^(hips?|pelvis)$/i.test(n.replace(/^.*:/, '')))]
+    || list[names.findIndex(n => /hip|pelvis/i.test(n))] || list[0];
 }
 
 /** json の human（"LeftUpperArm:骨の名前"）で人型の骨の対応を置き換える（.meta から読んだものは優先）。 */
@@ -1176,7 +1211,7 @@ function insertKey(keys, k) {
 
 function setKey(i, f) {
   const b = M.bones[i];
-  insertKey(track(i).keys, { f, q: b.quaternion.clone(), p: i === M.hips ? b.position.clone() : null });
+  insertKey(track(i).keys, { f, q: b.quaternion.clone(), p: hasPos(i) ? b.position.clone() : null });
 }
 
 function keyBones(list, shapes = []) {
@@ -1474,7 +1509,7 @@ function attachGizmo() {
   if (!M || !S.sel || S.playing) return;
   if (S.sel.kind === 'bone') {
     const i = S.sel.i;
-    const movable = i === M.hips;
+    const movable = hasPos(i);
     gizmo.setMode(S.mode === 'translate' && movable ? 'translate' : 'rotate');
     gizmo.attach(M.bones[i]);
   } else if (S.sel.kind === 'ik') {
@@ -1484,7 +1519,8 @@ function attachGizmo() {
     gizmo.setMode('translate');
     gizmo.attach(M.limbs[S.sel.limb].pole);
   }
-  gizmo.setSpace(S.space);
+  // ルートはいつもワールドの向きで動かす（ルートのローカルの軸はFBXのArmatureの軸で、寝ていることがある）
+  gizmo.setSpace(S.sel.kind === 'bone' && S.sel.i === M.rootBone ? 'world' : S.space);
 }
 
 function selectedBone() {
@@ -1559,7 +1595,7 @@ function buildMarkers() {
   const n = M.bones.length;
   MK.points = mkPoints(n, 11, circleTex);
   MK.lines = mkLines(n, 0xc8d0e0, 0.45);
-  MK.handles = mkPoints(8, 13, null);
+  MK.handles = mkPoints(9, 13, null);
   MK.poleLines = mkLines(4, 0x9fd0ff, 0.5);
   for (const k of ['prev', 'next']) {
     if (onion[k]) { scene.remove(onion[k]); onion[k].geometry.dispose(); }
@@ -1569,7 +1605,7 @@ function buildMarkers() {
 }
 
 function boneShown(i) {
-  if (S.boneView === 'none') return false;
+  if (S.boneView === 'none' || i === M.rootBone) return false;
   if (S.ik && M.limbs.some(L => L.c === i)) return false;
   return S.boneView === 'all' || M.humanSet.has(i);
 }
@@ -1616,6 +1652,13 @@ function updateMarkers() {
       plp.setXYZ(pl++, _v.x, _v.y, _v.z);
       plp.setXYZ(pl++, L.pole.position.x, L.pole.position.y, L.pole.position.z);
     });
+  }
+  // 緑の四角 = ルート
+  if (M.rootBone >= 0 && S.boneView !== 'none') {
+    M.bones[M.rootBone].getWorldPosition(_v);
+    hp.setXYZ(MK.hlist.length, _v.x, _v.y, _v.z);
+    hc.setXYZ(MK.hlist.length, ...(S.sel?.kind === 'bone' && S.sel.i === M.rootBone ? [1, 0.54, 0.24] : S.edited.has(M.rootBone) ? [1, 0.85, 0.3] : [0.4, 0.9, 0.5]));
+    MK.hlist.push({ kind: 'bone', i: M.rootBone });
   }
   MK.handles.geometry.setDrawRange(0, MK.hlist.length);
   hp.needsUpdate = hc.needsUpdate = true;
@@ -1694,6 +1737,7 @@ function pick(x, y) {
     if (d <= radius && (!best || d < best.d)) best = { d, sel };
   };
   if (S.ik) M.limbs.forEach((L, li) => { tryHit(L.target.position, { kind: 'ik', limb: li }, 10); tryHit(L.pole.position, { kind: 'pole', limb: li }, 9); });
+  if (M.rootBone >= 0 && S.boneView !== 'none') tryHit(wp(M.bones[M.rootBone]), { kind: 'bone', i: M.rootBone }, 10);
   if (!best) for (const i of MK.list) tryHit(wp(M.bones[i]), { kind: 'bone', i }, 9);
   if (best) { select(best.sel); return; }
 
@@ -1778,6 +1822,12 @@ function applyOwnDeltas(own, hipsDelta) {
   }
 }
 const hipsDelta = () => wp(M.bones[M.hips]).sub(M.restWP[M.hips]);
+/** ルートを、ワールドの位置 p の左右を入れ替えた所へ置く。 */
+function mirrorRootPos(p) {
+  if (M.rootBone < 0) return;
+  setWorldPos(M.bones[M.rootBone], mirrorV(p));
+  M.root.updateMatrixWorld(true);
+}
 
 function changedBones(before) {
   const out = [];
@@ -1815,7 +1865,7 @@ function mirrorPose(mode) {
     const j = partnerOf(sel);
     out[j] = mirrorQ(own[sel]);
   }
-  if (mode === 'all') hd = mirrorV(hd);
+  if (mode === 'all') { hd = mirrorV(hd); mirrorRootPos(wp(M.bones[Math.max(0, M.rootBone)])); }
   applyOwnDeltas(out, hd);
   afterPoseOp(before);
   setStatus({ all: '全身を反転', L2R: '左を右へ', R2L: '右を左へ', sel: `${M.names[sel]} → ${M.names[partnerOf(sel)]}` }[mode]);
@@ -1830,6 +1880,7 @@ function copyPose() {
     whole: one < 0,
     items: idx.map(i => ({ name: M.names[i], q: M.bones[i].quaternion.clone(), p: M.bones[i].position.clone() })),
     own: one < 0 ? ownDeltas() : null, hips: one < 0 ? hipsDelta() : null, model: M.name,
+    rootPos: one < 0 && M.rootBone >= 0 ? wp(M.bones[M.rootBone]) : null,
   };
   lastCopy = 'pose';
   setStatus(one >= 0 ? `${M.names[one]}をコピー` : '全身をコピー');
@@ -1839,13 +1890,14 @@ function pastePose(mirror) {
   pushUndo();
   const before = savePose();
   if (mirror && clipboard.whole && clipboard.model === M.name) {
+    if (clipboard.rootPos) mirrorRootPos(clipboard.rootPos);
     applyOwnDeltas(M.bones.map((_, i) => mirrorQ(clipboard.own[partnerOf(i)])), mirrorV(clipboard.hips));
   } else {
     for (const it of clipboard.items) {
       const i = M.byName.get(it.name);
       if (i == null) continue;
       M.bones[i].quaternion.copy(it.q);
-      if (i === M.hips) M.bones[i].position.copy(it.p);
+      if (hasPos(i)) M.bones[i].position.copy(it.p);
     }
     M.root.updateMatrixWorld(true);
   }
@@ -2002,7 +2054,8 @@ function tlRows() {
   const sel = selectedBone();
   const bones = new Set([...D.tracks].filter(([, t]) => t.keys.length).map(([i]) => i));
   if (sel >= 0) bones.add(sel);
-  for (const i of [...bones].sort((a, b) => a - b)) rows.push({ label: M.names[i], ref: 'b' + i, bone: i, selected: i === sel });
+  const rootFirst = i => (i === M.rootBone ? -1 : i);
+  for (const i of [...bones].sort((a, b) => rootFirst(a) - rootFirst(b))) rows.push({ label: M.names[i], ref: 'b' + i, bone: i, selected: i === sel });
   const shapes = new Set([...D.shapes].filter(([, t]) => t.keys.length).map(([id]) => id));
   if (S.shapeSel != null) shapes.add(S.shapeSel);
   for (const id of [...shapes].filter(v => M.shapeIndex.has(v)).sort((a, b) => M.shapeIndex.get(a) - M.shapeIndex.get(b)))
@@ -2348,7 +2401,7 @@ function pasteKeys() {
     if (it.bone != null) {
       const i = M.byName.get(it.bone);
       if (i == null) continue;
-      insertKey(track(i).keys, { f, q: it.q.clone(), p: i === M.hips ? (it.p ? it.p.clone() : M.bones[i].position.clone()) : null });
+      insertKey(track(i).keys, { f, q: it.q.clone(), p: hasPos(i) ? (it.p ? it.p.clone() : M.bones[i].position.clone()) : null });
       TL.sel.add(`b${i}:${f}`);
     } else if (M.shapeIndex.has(it.shape)) {
       insertKey(shapeTrack(it.shape).keys, { f, v: it.v });
@@ -2390,7 +2443,7 @@ function buildBoneList() {
   list.innerHTML = '';
   collapsed.clear();
   // 人型でない骨の枝（髪・スカートなど）は閉じておく
-  M.bones.forEach((_, i) => { if (!M.humanSet.has(i) && M.children[i].length) collapsed.add(i); });
+  M.bones.forEach((_, i) => { if (!M.humanSet.has(i) && M.children[i].length && i !== M.rootBone) collapsed.add(i); });
   M.rows = M.bones.map((b, i) => {
     const row = document.createElement('div');
     row.className = 'bone' + (M.humanSet.has(i) ? ' human' : '');
@@ -2427,7 +2480,7 @@ function refreshBoneListVisibility() {
   M.rows.forEach(({ row, tw }, i) => {
     let show;
     if (q) show = M.names[i].toLowerCase().includes(q);
-    else if (humanOnly) show = M.humanSet.has(i);
+    else if (humanOnly) show = M.humanSet.has(i) || i === M.rootBone;
     else { show = true; for (let p = M.parent[i]; p >= 0; p = M.parent[p]) if (collapsed.has(p)) { show = false; break; } }
     row.style.display = show ? '' : 'none';
     let depth = M.depth[i];
@@ -2750,14 +2803,17 @@ function buildFile() {
       if (j + 1 < ks.length && k.mode !== 2) for (let f = k.f + 1; f < ks[j + 1].f; f++) frames.add(f);
     });
   }
+  // ルートは骨として書かない（FBXに無い）。ルートの動きは、腰のワールドの向きと位置に入って出ていく
+  const written = tracked.filter(i => i !== M.rootBone);
+  if (written.length < tracked.length && !written.includes(M.hips)) { written.push(M.hips); written.sort((a, b) => a - b); }
   const poses = [...frames].sort((a, b) => a - b).map(f => {
     poseAt(f);
-    const rot = new Array(tracked.length * 4);
-    const put = k => { const d = deltaOf(tracked[k]); rot[k * 4] = r6(d.x); rot[k * 4 + 1] = r6(d.y); rot[k * 4 + 2] = r6(d.z); rot[k * 4 + 3] = r6(d.w); };
-    tracked.forEach((i, k) => { if (M.humanSet.has(i)) put(k); });
+    const rot = new Array(written.length * 4);
+    const put = k => { const d = deltaOf(written[k]); rot[k * 4] = r6(d.x); rot[k * 4 + 1] = r6(d.y); rot[k * 4 + 2] = r6(d.z); rot[k * 4 + 3] = r6(d.w); };
+    written.forEach((i, k) => { if (M.humanSet.has(i) || i === M.hips) put(k); });
     // 人型でない骨（髪・しっぽなど）は、見えていた向き（Unity の再生の姿での向き）で書く
     const view = applyUnityView();
-    tracked.forEach((i, k) => { if (!M.humanSet.has(i)) put(k); });
+    written.forEach((i, k) => { if (!M.humanSet.has(i) && i !== M.hips) put(k); });
     restoreUnityView(view);
     const hp = hipsDelta();
     const interp = real.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? 2 : 1);
@@ -2788,7 +2844,7 @@ function buildFile() {
 
   const seen = new Set(), restBones = [], rest = [];
   M.names.forEach((n, i) => {
-    if (seen.has(n)) return;
+    if (seen.has(n) || i === M.rootBone) return;
     seen.add(n);
     restBones.push(n);
     rest.push(r6(M.restWP[i].x), r6(M.restWP[i].y), r6(M.restWP[i].z));
@@ -2797,7 +2853,7 @@ function buildFile() {
     format: 'MotionToolWeb', version: 1, model: M.name, name: D.name,
     fps: D.fps, frameCount: D.frameCount, loop: D.loop,
     restFrom: 'three', restBones, rest, hips: M.names[M.hips],
-    bones: tracked.map(i => M.names[i]), poses, shapeCurves,
+    bones: written.map(i => M.names[i]), poses, shapeCurves,
     human: Object.entries(M.human).map(([k, i]) => `${k}:${M.names[i]}`),
     ...(M.unityInfo ? Object.fromEntries(Object.entries(M.unityInfo).filter(([, v]) => v)) : {}),
     // ここから下は HTML だけが使う（Unity は無視する）
@@ -2809,9 +2865,47 @@ function buildFile() {
 
 const clipNameOf = fileName => fileName.replace(/\.json$/i, '').replace(/\.motion$/i, '');
 
+/**
+ * Unityから開いたときの保存。Unityが.animにして、プロジェクトに置く。
+ * 編集用のデータ（骨ごとのキー）も渡す。Unityが.animと一緒に覚えておき、次に開くときに返してくる。
+ */
+async function saveToUnity(as) {
+  let path = S.unity.path;
+  if (as || !path) {
+    path = await ask('保存先', `${S.unity.dir}/${D.name}.anim`);
+    if (!path) return;
+  }
+  const file = buildFile();
+  const edit = { ...file };
+  for (const k of ['poses', 'shapeCurves', 'restBones', 'rest', 'human', 'axes', 'twist', 'unityRest', 'zeroPose']) delete edit[k];
+  const post = async overwrite => {
+    const r = await fetch('unity/save', { method: 'POST', body: JSON.stringify({ path, overwrite, motion: JSON.stringify(file), edit: JSON.stringify(edit) }) });
+    return r.json();
+  };
+  let res;
+  try {
+    res = await post(path === S.unity.path);
+    if (res.exists) {
+      if (!confirm(`${res.path} を上書きしますか？`)) return;
+      res = await post(true);
+    }
+  } catch (e) {
+    setStatus('Unityとつながりません。UnityでTools/Motion Toolをもう一度選んでください', true);
+    return;
+  }
+  if (!res.ok) { setStatus('保存できません: ' + res.message, true); return; }
+  S.unity.path = res.path;
+  S.unity.dir = res.path.replace(/\/[^/]*$/, '');
+  D.name = res.path.replace(/^.*\//, '').replace(/\.anim$/i, '');
+  S.dirty = false;
+  updateTitle();
+  setStatus(`保存: ${res.path}` + (res.message ? '  ' + res.message : ''));
+}
+
 async function save(as) {
   if (!M) { setStatus('先にFBXを開いてください', true); return; }
   if (!hasKeys()) { setStatus('キーがありません', true); return; }
+  if (S.unity) { await saveToUnity(as); return; }
   const text = JSON.stringify(buildFile());
   try {
     if (window.showSaveFilePicker) {
@@ -2885,7 +2979,7 @@ function applyMotionJson(obj, fileName, handle) {
   if (usable) {
     for (const t of obj.tracks) {
       const i = M.byName.get(t.bone);
-      D.tracks.set(i, { keys: t.keys.map(k => ({ f: k.f, q: new THREE.Quaternion().fromArray(k.q), p: k.p && i === M.hips ? new THREE.Vector3().fromArray(k.p) : null })) });
+      D.tracks.set(i, { keys: t.keys.map(k => ({ f: k.f, q: new THREE.Quaternion().fromArray(k.q), p: k.p && hasPos(i) ? new THREE.Vector3().fromArray(k.p) : null })) });
     }
     for (const [f, m] of obj.interp || []) D.interp.set(f, m);
   } else if (obj.poses?.length) {
@@ -2986,10 +3080,10 @@ function posesToTracks(obj, scale) {
 
 /** 開くたびに増える。最初のモデルを取りに行っている間に自分で何か開いたら、最初のモデルは出さない。 */
 let openCount = 0;
-async function handleFiles(files) {
+async function handleFiles(files, texByMat = null) {
   openCount++;
   const jsons = files.filter(f => /\.json$/i.test(f.name) && !isModelInfo(f));
-  const hadModel = await loadModelFiles(files);
+  const hadModel = await loadModelFiles(files, texByMat);
   if (jsons.length) await loadJsonFile(jsons[0]);
   if (!hadModel && !jsons.length) setStatus('FBXか.motion.jsonを落としてください', true);
 }
@@ -3058,6 +3152,23 @@ function showMenu(x, y, items) {
 }
 function hideMenu() { $('ctx').style.display = 'none'; }
 window.addEventListener('pointerdown', e => { if (!$('ctx').contains(e.target)) hideMenu(); }, true);
+
+/** 1行の入力。やめたら null。 */
+function ask(title, value) {
+  return new Promise(res => {
+    const m = $('ask'), input = m.querySelector('input');
+    m.querySelector('h3').textContent = title;
+    input.value = value;
+    const close = v => { m.classList.remove('show'); input.onkeydown = null; res(v); };
+    m.querySelector('.ok').onclick = () => close(input.value.trim() || null);
+    m.querySelector('.no').onclick = () => close(null);
+    m.onclick = e => { if (e.target === m) close(null); };
+    input.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') close(input.value.trim() || null); else if (e.key === 'Escape') close(null); };
+    m.classList.add('show');
+    input.focus();
+    input.select();
+  });
+}
 
 function choose(title, options) {
   return new Promise(res => {
@@ -3131,6 +3242,7 @@ function newDoc() {
   docVer++;
   S.fileHandle = null;
   S.fileName = null;
+  if (S.unity) S.unity.path = null;
   S.dirty = false;
   TL.sel.clear();
   TL.fit = true;
@@ -3347,6 +3459,7 @@ function renderHelp() {
   for (const [id, label] of MOUSE_ACTIONS) if (CFG.mouse[id]) add(mouseLabel(CFG.mouse[id]), label);
   add('ホイール', '寄る・引く');
   add('右クリック', 'その場所のメッシュ（服など）を隠す。「表示」タブでも切り替え');
+  add('緑の四角', 'ルート。全体の移動と回転（腰から下がまとめて動く）');
   for (const [id, label] of ACTIONS) if (CFG.keys[id]) add(keyLabel(id), label);
   add('目盛り', 'ドラッグでフレーム、右端の印で長さ、ホイールで拡大、ダブルクリックで全体');
   add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shiftで足す、右クリックでつなぎ方');
@@ -3372,7 +3485,7 @@ window.addEventListener('keydown', e => {
     return;
   }
   const typing = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
-  const modal = ['help', 'settings', 'choose'].find(id => $(id).classList.contains('show'));
+  const modal = ['help', 'settings', 'choose', 'ask'].find(id => $(id).classList.contains('show'));
   if (e.code === 'Escape') {
     hideMenu();
     if (modal === 'help') { $('help').classList.remove('show'); return; }
@@ -3445,12 +3558,51 @@ async function filesFromUrls(urls) {
   return files.filter(Boolean);
 }
 
+/**
+ * UnityのTools/Motion Toolから開いたとき（アドレスに ?unity が付く）。Unityが立てたサーバーから、選んだアバターを受け取る。
+ * テクスチャは、Unityが「FBXのマテリアル名 → 画像」の対応を付けて渡す。
+ */
+async function filesFromUnity() {
+  let man;
+  try { const r = await fetch('unity/manifest.json'); if (!r.ok) return null; man = await r.json(); } catch (e) { return null; }
+  const get = async (url, name) => {
+    try { const r = await fetch(url); return r.ok ? new File([await r.blob()], name) : null; } catch (e) { return null; }
+  };
+  const texs = man.textures || [];
+  const [fbx, info, ...images] = await Promise.all([
+    get(man.fbx, man.model), get(man.info, man.model + '.motiontool.json'), ...texs.map(t => get(t.url, t.file)),
+  ]);
+  if (!fbx) return null;
+  const texByMat = new Map();
+  texs.forEach((t, i) => { if (images[i]) texByMat.set(t.material.toLowerCase(), images[i]); });
+  return { files: [fbx, info, ...images].filter(Boolean), texByMat, man };
+}
+
+/** Unityで.animを選んで開いたとき。Unityが覚えていた編集用のデータか、無ければ.animから起こしたポーズが来る。 */
+async function openFromUnity(man) {
+  S.unity = { path: man.anim || null, dir: man.saveDir || 'Assets' };
+  document.body.classList.add('unity');
+  if (!man.motion) return;
+  try {
+    const r = await fetch(man.motion);
+    if (!r.ok) return;
+    const name = man.anim.replace(/^.*\//, '').replace(/\.anim$/i, '');
+    applyMotionJson(await r.json(), name + '.motion.json', null);
+    S.unity.path = man.anim;
+    setStatus($('status').textContent.replace(name + '.motion.json', name + '.anim'), $('status').classList.contains('err'));
+  } catch (e) {
+    setStatus('.animを開けません: ' + e.message, true);
+  }
+}
+
 async function loadDefaultModel() {
   if (!/^https?:$/.test(location.protocol)) return;
   const opened = openCount;
-  const files = await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
+  const unity = new URLSearchParams(location.search).has('unity') ? await filesFromUnity() : null;
+  const files = unity ? unity.files : await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
   if (openCount !== opened || M || !files.some(f => /\.fbx$/i.test(f.name))) return;
-  await handleFiles(files);
+  await handleFiles(files, unity ? unity.texByMat : null);
+  if (unity) await openFromUnity(unity.man);
   S.dirty = false;
   updateTitle();
 }
