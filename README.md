@@ -8,6 +8,16 @@ https://quikku.github.io/motion-tool/
 
 作ったモーションは、ブラウザの中で処理するだけで、外部には送信しません。
 
+## 自分のアバターで使う
+
+Unityのスクリプトを使うと、シーンのアバターをこのツールで開けます。
+
+1. [MotionTool.unitypackage](MotionTool.unitypackage)をUnityにインポートします（Unity 2022.3で確認。アバターはHumanoidです）。
+2. ヒエラルキーでアバターを選び、`Tools/Motion Tool`を押します。ブラウザでそのアバターが開きます。
+3. 骨を回してキーを打ち、「保存」を押します。Assetsの中に.animができます。
+
+既にある.animは、右クリックして`Motion Tool/開く`で開けます。
+
 ## クレジット
 
 - 最初に表示されるモデルは[茜犬 -Akane-](https://minto-akayama.booth.pm/items/8861598)です。赤山みんとさんがCC0で公開しています。
