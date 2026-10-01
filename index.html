@@ -1,0 +1,3475 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion Tool</title>
+<style>
+:root {
+  --bg: #1c1d20; --panel: #25272b; --panel2: #2f3136; --line: #3a3d44; --text: #d9dbe0; --dim: #8a8f99;
+  --accent: #4ea1ff; --key: #e2b340; --sel: #ff8a3d; --red: #e0605a; --green: #5fbf6a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+  font: 12px/1.4 system-ui, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif; user-select: none; }
+#app { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 240px 1fr; height: 100vh; }
+#toolbar { grid-column: 1 / 3; display: flex; gap: 4px; align-items: center; padding: 4px 6px;
+  background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#view { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+#view canvas { display: block; width: 100%; height: 100%; outline: none; }
+#timeline { grid-column: 1 / 3; background: var(--panel); border-top: 1px solid var(--line); }
+button, select, input { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 2px 7px; height: 23px; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: #5a5f69; }
+button.on { background: #2b4666; border-color: var(--accent); }
+button:disabled { opacity: .4; cursor: default; }
+input[type=number] { width: 52px; padding: 2px 4px; }
+input[type=checkbox] { height: auto; vertical-align: middle; margin: 0 3px 0 0; }
+label { display: inline-flex; align-items: center; color: var(--text); }
+.sep { width: 1px; height: 18px; background: var(--line); margin: 0 3px; }
+#status { margin-left: auto; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45vw; padding-left: 8px; }
+#status.err { color: var(--red); }
+#side .head { padding: 4px; border-bottom: 1px solid var(--line); display: flex; gap: 4px; }
+#side .head input { flex: 1; min-width: 0; height: 23px; }
+#bones, #shapes, #meshes { flex: 1; overflow: auto; padding: 2px 0; }
+.meshrow { display: flex; align-items: center; gap: 5px; height: 21px; padding: 0 6px; cursor: pointer; white-space: nowrap; }
+.meshrow:hover { background: #2c2f35; }
+.meshrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.meshrow.off .nm { color: var(--dim); }
+.meshbar { display: flex; gap: 4px; padding: 4px; border-bottom: 1px solid var(--line); }
+#side .tabs { display: flex; gap: 2px; padding: 4px 4px 0; border-bottom: 1px solid var(--line); }
+#side .tabs button { flex: 1; border-radius: 3px 3px 0 0; border-bottom: 0; }
+.mesh { display: flex; align-items: center; height: 21px; padding: 0 4px; cursor: pointer; color: var(--dim); white-space: nowrap; }
+.mesh:hover { background: #2c2f35; }
+.mesh .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.shape { display: flex; align-items: center; gap: 4px; height: 21px; padding: 0 4px 0 16px; cursor: pointer; white-space: nowrap; }
+.shape:hover { background: #2c2f35; }
+.shape.sel { background: #2b4666; }
+.shape .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #aab0ba; }
+.shape.on .nm { color: #fff; }
+.shape input[type=range] { width: 70px; height: 14px; padding: 0; margin: 0; background: none; border: 0; accent-color: var(--accent); }
+.shape .val { width: 24px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+.shape .kd { width: 10px; text-align: center; font-size: 9px; color: transparent; }
+.shape.keyed .kd { color: #8a7433; }
+.shape.keynow .kd { color: var(--key); }
+.shape.edited .val { color: var(--sel); }
+.bone { display: flex; align-items: center; height: 19px; padding-right: 4px; cursor: pointer; white-space: nowrap; }
+.bone:hover { background: #2c2f35; }
+.bone.sel { background: #2b4666; }
+.bone .tw { width: 12px; flex: none; color: var(--dim); text-align: center; }
+.bone .nm { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.bone.human .nm { color: #fff; }
+.bone:not(.human) .nm { color: #aab0ba; }
+.bone .kd { width: 12px; flex: none; text-align: center; font-size: 9px; color: transparent; }
+.bone.keyed .kd { color: #8a7433; }
+.bone.keynow .kd { color: var(--key); }
+#tlbar { display: flex; gap: 4px; align-items: center; padding: 4px 6px; flex-wrap: wrap; }
+#tlwrap { position: relative; height: 170px; }
+#tlresize { height: 7px; margin-top: -4px; cursor: ns-resize; position: relative; }
+#tlresize:hover { background: var(--accent); }
+#tl { display: block; width: 100%; height: 100%; }
+#empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim);
+  font-size: 14px; pointer-events: none; text-align: center; line-height: 1.8; }
+#drop { position: fixed; inset: 0; background: rgba(78,161,255,.12); border: 2px dashed var(--accent); display: none;
+  align-items: center; justify-content: center; font-size: 16px; z-index: 50; pointer-events: none; }
+#drop.show { display: flex; }
+.menu { position: fixed; background: var(--panel2); border: 1px solid #50545c; border-radius: 4px; padding: 3px 0; z-index: 60;
+  min-width: 140px; box-shadow: 0 4px 14px rgba(0,0,0,.4); display: none; }
+.menu div { padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+.menu div:hover { background: #2b4666; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 3px 0; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 70; }
+.modal.show { display: flex; }
+.modal .box { background: var(--panel); border: 1px solid #50545c; border-radius: 6px; padding: 12px 14px; min-width: 260px; max-width: 520px; }
+.modal .box h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.modal .box .list { display: flex; flex-direction: column; gap: 4px; }
+.modal .box .list button { text-align: left; height: auto; padding: 5px 8px; }
+#help table { border-collapse: collapse; }
+#help .box, #settings .box { max-height: 86vh; overflow: auto; }
+#settings .box { width: min(680px, 94vw); max-width: none; }
+#settings h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--key); }
+.setrow { display: flex; align-items: center; gap: 6px; padding: 2px 0; flex-wrap: wrap; }
+.setrow .lb { width: 140px; flex: none; }
+.setrow .kb { flex: 1; min-width: 90px; text-align: left; }
+.keygrid .setrow { flex-wrap: nowrap; }
+.setrow .kx { padding: 2px 6px; color: var(--dim); }
+.keygrid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
+#settings .note { color: var(--dim); margin: 2px 0 0; }
+#help td { padding: 2px 10px 2px 0; vertical-align: top; }
+#help td:first-child { color: var(--key); white-space: nowrap; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <button id="bModel" title="FBX を開く（テクスチャや .meta も一緒に選べる）">FBX</button>
+    <button id="bFolder" title="モデルのフォルダを開く">フォルダ</button>
+    <span class="sep"></span>
+    <button id="bNew">新規</button>
+    <button id="bOpen" title="Ctrl+O">開く</button>
+    <button id="bSave" title="Ctrl+S">保存</button>
+    <button id="bSaveAs">別名で保存</button>
+    <span class="sep"></span>
+    <button id="bMove" title="W">移動</button>
+    <button id="bRot" title="E">回転</button>
+    <button id="bSpace" title="X">ローカル</button>
+    <span class="sep"></span>
+    <button id="bIK" title="手先・足先を IK で動かす">IK</button>
+    <button id="bPin" title="体を動かしても、IK の手先・足先をその場に残す">固定</button>
+    <button id="bAuto" title="動かし終えたらキーを打つ">自動キー</button>
+    <span class="sep"></span>
+    <button id="bPose">ポーズ ▾</button>
+    <button id="bBones" title="骨の表示">骨: 人型</button>
+    <button id="bOnion" title="前後のキーの骨を重ねる">オニオン</button>
+    <button id="bSettings" title="マウスとキーの割り当て">設定</button>
+    <button id="bHelp">?</button>
+    <span id="status"></span>
+  </div>
+  <div id="side">
+    <div class="tabs"><button id="tabBones" class="on">骨</button><button id="tabShapes">シェイプ</button><button id="tabMeshes">表示</button></div>
+    <div class="head"><input id="filter" placeholder="探す"></div>
+    <div id="bones"></div>
+    <div id="shapes" style="display:none"></div>
+    <div id="meshes" style="display:none"></div>
+  </div>
+  <div id="view">
+    <div id="empty"><div>FBX かモデルのフォルダをここに落とす<br><span style="font-size:12px">.meta も一緒だと人型の骨がわかる</span></div></div>
+  </div>
+  <div id="timeline">
+    <div id="tlresize"></div>
+    <div id="tlbar">
+      <button id="bPlay" title="Space">▶</button>
+      <button id="bPrevKey" title="Shift+,">|◀</button>
+      <button id="bPrev" title=",">◀</button>
+      <input id="frame" type="number" min="0" value="0">
+      <button id="bNext" title=".">▶</button>
+      <button id="bNextKey" title="Shift+.">▶|</button>
+      <span style="color:var(--dim)">/</span>
+      <input id="frames" type="number" min="1" value="60" title="フレーム数">
+      <span style="color:var(--dim)">fps</span>
+      <input id="fps" type="number" min="1" max="240" value="30">
+      <label><input id="loop" type="checkbox" checked>ループ</label>
+      <span class="sep"></span>
+      <button id="bKey" title="K">キー</button>
+      <button id="bKeyAll" title="Shift+K">全身キー</button>
+      <button id="bDel" title="Delete">キーを消す</button>
+      <select id="interp" title="このフレームから次のキーまでのつなぎ方">
+        <option value="0">Auto</option><option value="1">Linear</option><option value="2">Constant</option>
+      </select>
+      <span id="unkeyed" style="color:var(--sel)"></span>
+    </div>
+    <div id="tlwrap"><canvas id="tl"></canvas></div>
+  </div>
+</div>
+<div id="drop">ここに落とす</div>
+<div id="ctx" class="menu"></div>
+<div id="choose" class="modal"><div class="box"><h3></h3><div class="list"></div></div></div>
+<div id="help" class="modal"><div class="box">
+  <h3>操作</h3>
+  <table id="helpTable"></table>
+  <p style="color:var(--dim);margin:8px 0 0">保存した .motion.json を Unity に置いて、右クリック → Motion Tool → .anim にする</p>
+  <p style="color:var(--dim);margin:8px 0 0">最初のモデル: <a href="https://minto-akayama.booth.pm/items/8861598" target="_blank" rel="noopener" style="color:var(--accent)">茜犬 -Akane-</a>（CC0、赤山みんと）</p>
+</div></div>
+<div id="settings" class="modal"><div class="box"><h3>設定</h3><div id="settingsBody"></div></div></div>
+<input id="fileModel" type="file" multiple accept=".fbx,.meta,.png,.jpg,.jpeg,.tga" hidden>
+<input id="fileFolder" type="file" webkitdirectory hidden>
+<input id="fileJson" type="file" accept=".json" hidden>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { TGALoader } from 'three/addons/loaders/TGALoader.js';
+
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const r6 = v => Math.round(v * 1e6) / 1e6;
+
+// ================================================================
+//  3D
+// ================================================================
+
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+view.appendChild(renderer.domElement);
+renderer.domElement.tabIndex = 0;
+const scene = new THREE.Scene();
+scene.matrixWorldAutoUpdate = false; // 描く直前に自分で更新する（骨を表示用の向きにする前の値でギズモを置くため）
+scene.background = new THREE.Color(0x2a2c30);
+const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+camera.position.set(0, 1, 4);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x50505a, 2.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+sun.position.set(1, 2, 3);
+scene.add(sun);
+let grid = new THREE.GridHelper(4, 20, 0x5a5a5a, 0x3a3a3a);
+scene.add(grid);
+
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.target.set(0, 1, 0);
+orbit.mouseButtons = { LEFT: -1, MIDDLE: -1, RIGHT: -1 }; // 押したときに、設定の割り当てで決める
+orbit.enableDamping = false;
+
+const gizmo = new TransformControls(camera, renderer.domElement);
+gizmo.setSpace('local');
+gizmo.setMode('rotate');
+gizmo.setSize(0.9);
+scene.add(gizmo.getHelper());
+gizmo.addEventListener('dragging-changed', e => { orbit.enabled = !e.value; });
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(1, h);
+  camera.updateProjectionMatrix();
+  drawTimeline();
+}
+new ResizeObserver(resize).observe(view);
+
+const wq = (o, out = new THREE.Quaternion()) => o.getWorldQuaternion(out);
+const wp = (o, out = new THREE.Vector3()) => o.getWorldPosition(out);
+function setWorldQuat(o, q) {
+  const pq = o.parent ? wq(o.parent) : new THREE.Quaternion();
+  o.quaternion.copy(pq.invert().multiply(q)).normalize();
+  o.updateMatrixWorld(true);
+}
+function setWorldPos(o, p) {
+  o.parent.updateWorldMatrix(true, false);
+  o.position.copy(o.parent.worldToLocal(p.clone()));
+  o.updateMatrixWorld(true);
+}
+// Unity ⇔ three.js、左右の反転（モデルは +Z を向き、左右は X）
+const mirrorQ = q => new THREE.Quaternion(q.x, -q.y, -q.z, q.w);
+const mirrorV = v => new THREE.Vector3(-v.x, v.y, v.z);
+
+// ================================================================
+//  状態
+// ================================================================
+
+let M = null; // モデル
+const D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map() };
+let docVer = 0;
+const S = {
+  frame: 0, playing: false, playT: 0, sel: null, edited: new Set(), shapeEdited: new Set(), shapeSel: null, tab: 'bones',
+  autoKey: true, ik: true, pin: false, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
+  dirty: false, fileHandle: null, fileName: null, pendingJson: null,
+};
+
+function setStatus(text, err = false) {
+  const el = $('status');
+  el.textContent = text || '';
+  el.title = text || '';
+  el.classList.toggle('err', !!err);
+}
+
+function markDirty() {
+  S.dirty = true;
+  updateTitle();
+}
+function updateTitle() { document.title = `${D.name}${S.dirty ? ' *' : ''} - Motion Tool`; }
+window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ================================================================
+//  モデル
+// ================================================================
+
+const IMAGE_RE = /\.(png|jpe?g|tga|bmp|webp)$/i;
+const MISSING_TEX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+
+async function loadModelFiles(files) {
+  const fbxs = files.filter(f => /\.fbx$/i.test(f.name));
+  if (!fbxs.length) return false;
+  let fbx = fbxs[0];
+  if (fbxs.length > 1) {
+    fbxs.sort((a, b) => a.name.localeCompare(b.name));
+    const i = await choose('どの FBX？', fbxs.map(f => f.name));
+    if (i < 0) return true;
+    fbx = fbxs[i];
+  }
+  const images = new Map();
+  for (const f of files) if (IMAGE_RE.test(f.name)) images.set(f.name.toLowerCase(), f);
+  const metaFile = files.find(f => f.name.toLowerCase() === fbx.name.toLowerCase() + '.meta');
+  const meta = metaFile ? await metaFile.text() : null;
+  // Unity の「HTML 用に書き出す」で FBX から作ったモデルの情報（人型の骨の対応と、マッスルの回転軸）
+  const infoFile = files.find(f => f.name.toLowerCase() === fbx.name.toLowerCase() + '.motiontool.json');
+  let info = null;
+  if (infoFile) { try { info = JSON.parse(await infoFile.text()); } catch (e) { info = null; } }
+
+  setStatus('読み込み中…');
+  const urls = [];
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier(url => {
+    if (url.startsWith('data:') || url.startsWith('blob:')) return url;
+    const base = decodeURIComponent(url).split(/[\\/]/).pop().toLowerCase();
+    const f = images.get(base);
+    if (!f) return MISSING_TEX;
+    const u = URL.createObjectURL(f);
+    urls.push(u);
+    return u;
+  });
+  manager.addHandler(/\.tga$/i, new TGALoader(manager));
+  // テクスチャを読み始めたときだけ、読み終わるのを待つ（最長 4 秒）
+  let loading = false;
+  manager.onStart = () => { loading = true; };
+  const done = new Promise(res => { manager.onLoad = res; });
+  let group;
+  const buffer = await fbx.arrayBuffer();
+  try {
+    group = new FBXLoader(manager).parse(buffer, '');
+  } catch (e) {
+    console.error(e);
+    setStatus('FBX を読めません: ' + e.message, true);
+    return true;
+  }
+  // FBXLoader は軸の設定（Z-up など）を見ないので、Unity と同じく Y-up・+Z 向きに回す
+  group.quaternion.setFromRotationMatrix(axisConversion(readAxes(buffer)));
+  if (loading) await Promise.race([done, new Promise(res => setTimeout(res, 4000))]);
+  const missing = fixMaterials(group, images, urls, await unityTextures(files, meta));
+  setModel(group, fbx.name, meta, info);
+  if (missing.length) setStatus($('status').textContent + `  テクスチャなし: ${missing.join(', ')}`);
+  return true;
+}
+
+const pathOf = f => (f._path || f.webkitRelativePath || f.name).toLowerCase();
+
+/**
+ * Unity のマテリアルをたどって「FBX のマテリアル名 → 画像」を出す（開いたフォルダに .mat と .meta があるとき）。
+ * FBX の .meta の対応表 → .mat の _MainTex → その GUID の画像。名前が違っていても（cloth と Costume など）合う。
+ */
+async function unityTextures(files, fbxMeta) {
+  const out = new Map();
+  const mats = files.filter(f => /\.mat$/i.test(f.name));
+  if (!mats.length) return out;
+  const byPath = new Map(files.map(f => [pathOf(f), f]));
+  const guidOf = async f => {
+    const meta = byPath.get(pathOf(f) + '.meta');
+    return meta ? (/^guid:\s*([0-9a-f]{32})/m.exec(await meta.text()) || [])[1] : null;
+  };
+  const matInfo = await Promise.all(mats.map(async f => {
+    const text = await f.text();
+    return {
+      guid: await guidOf(f),
+      name: ((/^\s*m_Name:\s*(.+?)\s*$/m.exec(text) || [])[1] || f.name.replace(/\.mat$/i, '')).toLowerCase(),
+      tex: (/_MainTex:\s*m_Texture:\s*\{[^}]*guid:\s*([0-9a-f]{32})/.exec(text) || [])[1],
+    };
+  }));
+  const wanted = new Set(matInfo.map(m => m.tex).filter(Boolean));
+  const imageByGuid = new Map();
+  await Promise.all(files.filter(f => IMAGE_RE.test(f.name)).map(async f => {
+    const g = await guidOf(f);
+    if (g && wanted.has(g)) imageByGuid.set(g, f);
+  }));
+  const texOf = m => (m && m.tex ? imageByGuid.get(m.tex) : null);
+  // 名前が同じマテリアル
+  for (const m of matInfo) { const f = texOf(m); if (f && !out.has(m.name)) out.set(m.name, f); }
+  // FBX の .meta の対応表（あればこちら）
+  const re = /type:\s*UnityEngine:Material\s+assembly:.*\s+name:\s*(.+?)\s*\n\s*second:\s*\{[^}]*guid:\s*([0-9a-f]{32})/g;
+  for (let m; fbxMeta && (m = re.exec(fbxMeta));) {
+    const f = texOf(matInfo.find(v => v.guid === m[2]));
+    if (f) out.set(m[1].toLowerCase(), f);
+  }
+  return out;
+}
+
+/** FBX の GlobalSettings の軸（UpAxis など）。バイナリとテキストの両方。無ければ Y-up・+Z 前・+X。 */
+function readAxes(buffer) {
+  const names = ['UpAxis', 'UpAxisSign', 'FrontAxis', 'FrontAxisSign', 'CoordAxis', 'CoordAxisSign'];
+  const out = { UpAxis: 1, UpAxisSign: 1, FrontAxis: 2, FrontAxisSign: 1, CoordAxis: 0, CoordAxisSign: 1 };
+  const bytes = new Uint8Array(buffer);
+  const head = new TextDecoder('latin1').decode(bytes.subarray(0, 20));
+  if (head.startsWith('Kaydara FBX Binary')) {
+    const dv = new DataView(buffer);
+    for (const name of names) {
+      const pat = [83, name.length, 0, 0, 0, ...[...name].map(ch => ch.charCodeAt(0))];
+      let i = -1;
+      outer: for (let s = 0; s + pat.length < bytes.length; s++) {
+        for (let k = 0; k < pat.length; k++) if (bytes[s + k] !== pat[k]) continue outer;
+        i = s;
+        break;
+      }
+      if (i < 0) continue;
+      let j = i + pat.length;
+      // 名前のあとに文字列 3 つ（型など）、そのあとに値
+      for (let n = 0; n < 3 && bytes[j] === 83; n++) j += 5 + dv.getUint32(j + 1, true);
+      if (bytes[j] === 73) out[name] = dv.getInt32(j + 1, true);
+    }
+  } else {
+    const text = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 200000)));
+    for (const name of names) {
+      const m = new RegExp(`"${name}"\\s*,\\s*"int"\\s*,\\s*"Integer"\\s*,\\s*""\\s*,\\s*(-?\\d+)`).exec(text);
+      if (m) out[name] = Number(m[1]);
+    }
+  }
+  return out;
+}
+
+/** ファイルの軸 → Y-up・+Z 前・+X（Unity で読んだときの向きを、X を反転する前の形で）。 */
+function axisConversion(a) {
+  const axis = (i, s) => new THREE.Vector3(i === 0 ? s : 0, i === 1 ? s : 0, i === 2 ? s : 0);
+  const c = axis(a.CoordAxis, a.CoordAxisSign), u = axis(a.UpAxis, a.UpAxisSign), f = axis(a.FrontAxis, a.FrontAxisSign);
+  const m = new THREE.Matrix4().makeBasis(c, u, f);
+  if (Math.abs(m.determinant() - 1) > 1e-6) return new THREE.Matrix4();
+  return m.transpose();
+}
+
+/**
+ * テクスチャは、Unity のマテリアルの物 → FBX が指している物 → マテリアル名に近い画像、の順で貼る。見た目はトゥーン 1 種にそろえる。
+ * 貼れなかったマテリアルの名前を返す。
+ */
+function fixMaterials(group, images, urls, unityTex) {
+  const loadFile = f => {
+    const u = URL.createObjectURL(f);
+    urls.push(u);
+    return (/\.tga$/i.test(f.name) ? new TGALoader() : new THREE.TextureLoader()).load(u);
+  };
+  const missing = [];
+  const byMat = new Map();
+  group.traverse(o => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const out = mats.map(m => {
+      if (byMat.has(m)) return byMat.get(m);
+      const own = unityTex.get((m.name || '').toLowerCase());
+      let map = own ? loadFile(own) : m.map && m.map.image && m.map.image.src !== MISSING_TEX ? m.map : null;
+      if (!map) {
+        const f = guessTexture(m.name, images);
+        if (f) map = loadFile(f);
+      }
+      if (map) map.colorSpace = THREE.SRGBColorSpace;
+      else missing.push(m.name || '(名前なし)');
+      const nm = new THREE.MeshToonMaterial({
+        name: m.name, map, color: map ? 0xffffff : (m.color ? m.color.clone() : new THREE.Color(0xcccccc)),
+        alphaTest: map ? 0.4 : 0, side: THREE.DoubleSide,
+      });
+      byMat.set(m, nm);
+      return nm;
+    });
+    o.material = Array.isArray(o.material) ? out : out[0];
+  });
+  return missing;
+}
+
+function guessTexture(matName, images) {
+  const norm = s => s.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]/g, '');
+  const want = norm(matName || '');
+  if (!want) return null;
+  let best = null;
+  for (const [name, f] of images) {
+    const n = norm(name);
+    if (/mask|normal|matcap|rim|outline|emission|shadow|alpha/.test(n)) continue;
+    if (!(n === want || n.endsWith(want) || want.endsWith(n))) continue;
+    if (!best || n.length < norm(best.name).length) best = f;
+  }
+  return best;
+}
+
+function setModel(group, name, meta, info = null) {
+  const oldNames = M ? D.tracks.size && new Map([...D.tracks].map(([i, t]) => [M.names[i], t])) : null;
+  if (M) {
+    gizmo.detach();
+    scene.remove(M.root);
+    for (const L of M.limbs) { scene.remove(L.target); scene.remove(L.pole); }
+    M.root.traverse(o => { if (o.isMesh) { o.geometry.dispose(); [].concat(o.material).forEach(m => { m.map?.dispose(); m.dispose(); }); } });
+  }
+  scene.add(group);
+  group.updateMatrixWorld(true);
+
+  const bones = [];
+  group.traverse(o => { if (o.isBone && !(o.parent && o.parent.isBone && o.parent.ID === o.ID)) bones.push(o); });
+  const index = new Map(bones.map((b, i) => [b, i]));
+  const names = bones.map(b => b.userData.originalName || b.name);
+  const byName = new Map();
+  names.forEach((n, i) => { if (!byName.has(n)) byName.set(n, i); });
+  const parent = bones.map(b => { for (let p = b.parent; p; p = p.parent) if (index.has(p)) return index.get(p); return -1; });
+  const depth = parent.map(() => 0);
+  for (let i = 0; i < bones.length; i++) depth[i] = parent[i] >= 0 ? depth[parent[i]] + 1 : 0;
+  const children = bones.map(() => []);
+  parent.forEach((p, i) => { if (p >= 0) children[p].push(i); });
+  const meshes = [];
+  group.traverse(o => { if (o.isMesh) meshes.push(o); });
+  // シェイプキー。id は「メッシュのパス|名前」（Unity のカーブのパスと blendShape.名前 に対応）
+  const shapes = [];
+  for (const m of meshes) {
+    if (!m.morphTargetDictionary) continue;
+    const path = [];
+    for (let o = m; o && o !== group; o = o.parent) path.unshift(o.userData.originalName ?? o.name);
+    const p = path.join('/');
+    for (const [name, idx] of Object.entries(m.morphTargetDictionary).sort((x, y) => x[1] - y[1]))
+      shapes.push({ id: `${p}|${name}`, mesh: m, path: p, name, idx });
+  }
+
+  M = {
+    root: group, name, bones, index, names, byName, parent, depth, children, meshes,
+    shapes, shapeById: new Map(shapes.map(x => [x.id, x])), shapeIndex: new Map(shapes.map((x, k) => [x.id, k])),
+    restQ: bones.map(b => b.quaternion.clone()),
+    restP: bones.map(b => b.position.clone()),
+    restWQ: bones.map(b => wq(b)),
+    restWP: bones.map(b => wp(b)),
+    human: {}, humanFrom: '', humanSet: new Set(), hips: -1, limbs: [], size: 1,
+  };
+  const box = new THREE.Box3();
+  for (const p of M.restWP) box.expandByPoint(p);
+  M.size = Math.max(1e-3, box.max.y - box.min.y) * 1.1;
+
+  let human = meta ? parseMetaHuman(meta) : null;
+  if (human && Object.keys(human).length) M.humanFrom = '.meta';
+  else { human = guessHuman(); M.humanFrom = '名前から推測'; }
+  setHuman(human);
+  if (info && info.model === name) applyHumanFromJson(info);
+  const axesFrom = info && info.model === name && setUnityInfo(info) ? 'Unity' : loadRememberedInfo() ? 'Unity（前回）' : '';
+
+  // 前のモデルのキーは、骨の名前で引き継ぐ
+  D.tracks.clear();
+  if (oldNames) for (const [n, t] of oldNames) if (byName.has(n)) D.tracks.set(byName.get(n), t);
+  for (const id of [...D.shapes.keys()]) if (!M.shapeById.has(id)) D.shapes.delete(id);
+  S.shapeSel = null;
+  docVer++;
+
+  frameCamera();
+  buildBoneList();
+  buildShapeList();
+  buildMeshList();
+  $('empty').style.display = 'none';
+  S.sel = null;
+  goFrame(S.frame);
+  setStatus(`${name}  骨 ${bones.length} 本、人型 ${M.humanSet.size} 本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は ${axesFrom}` : ''));
+  if (S.pendingJson) {
+    const p = S.pendingJson;
+    S.pendingJson = null;
+    applyMotionJson(p.obj, p.name, p.handle);
+  }
+}
+
+/** json の human（"LeftUpperArm:骨の名前"）で人型の骨の対応を置き換える（.meta から読んだものは優先）。 */
+function applyHumanFromJson(obj) {
+  if (!Array.isArray(obj.human) || !obj.human.length || M.humanFrom === '.meta') return;
+  const map = {};
+  for (const s of obj.human) { const at = s.indexOf(':'); const i = M.byName.get(s.slice(at + 1)); if (i != null) map[s.slice(0, at)] = i; }
+  if (Object.keys(map).length >= 10) { M.humanFrom = 'json'; setHuman(map); if (M.rows) buildBoneList(); }
+}
+
+/** "LeftUpperArm" 形式の名前 → 骨の番号。 */
+function setHuman(map) {
+  M.human = {};
+  for (const [k, i] of Object.entries(map)) if (i != null && i >= 0) M.human[k.replace(/\s+/g, '')] = i;
+  M.humanSet = new Set(Object.values(M.human));
+  M.hips = M.human.Hips ?? bonesMatching(/hip|pelvis/i)[0] ?? 0;
+  buildLimbs();
+  if (M.unityInfo) setUnityInfo(M.unityInfo, false);
+  else { buildDof(); buildUnityView(); }
+  S.boneView = M.humanSet.size >= 10 ? 'human' : 'all';
+  updateButtons();
+}
+
+function bonesMatching(re) { return M.names.map((n, i) => re.test(n) ? i : -1).filter(i => i >= 0); }
+
+function parseMetaHuman(text) {
+  const out = {};
+  const re = /-\s*boneName:\s*(.+?)\s*\r?\n\s*humanName:\s*(.+?)\s*\r?\n/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const bone = m[1].replace(/^['"]|['"]$/g, ''), hn = m[2].replace(/^['"]|['"]$/g, '');
+    if (M.byName.has(bone)) out[hn.replace(/\s+/g, '')] = M.byName.get(bone);
+  }
+  return out;
+}
+
+function sideOf(n) {
+  if (/left/i.test(n)) return 'Left';
+  if (/right/i.test(n)) return 'Right';
+  if (/(^|[_.\s-])[lL]([_.\s-]|\d|$)/.test(n)) return 'Left';
+  if (/(^|[_.\s-])[rR]([_.\s-]|\d|$)/.test(n)) return 'Right';
+  if (/[a-z][L]$/.test(n)) return 'Left';
+  if (/[a-z][R]$/.test(n)) return 'Right';
+  return '';
+}
+
+/** .meta が無いときの、名前からの推測。 */
+function guessHuman() {
+  const table = [
+    ['Hips', /^(hips?|pelvis)$/], ['Spine', /^spine$/], ['Chest', /^(chest|spine1)$/], ['UpperChest', /^(upperchest|spine2)$/],
+    ['Neck', /^neck$/], ['Head', /^head$/],
+    ['Shoulder', /^(shoulder|clavicle)$/], ['UpperArm', /^(upperarm|uparm|arm)$/], ['LowerArm', /^(lowerarm|forearm|elbow)$/],
+    ['Hand', /^(hand|wrist)$/], ['UpperLeg', /^(upperleg|upleg|thigh)$/], ['LowerLeg', /^(lowerleg|leg|calf|knee|shin)$/],
+    ['Foot', /^(foot|ankle)$/], ['Toes', /^(toes?|toebase)$/], ['Eye', /^eyes?$/],
+  ];
+  const fingers = { thumb: 'Thumb', index: 'Index', middle: 'Middle', ring: 'Ring', little: 'Little', pinky: 'Little' };
+  const segNames = { proximal: 0, intermediate: 1, distal: 2 };
+  const SEG = ['Proximal', 'Intermediate', 'Distal'];
+  const out = {};
+  const fingerBones = []; // [side, 指, 番号 or 名前, 骨]
+  M.names.forEach((raw, i) => {
+    const n = raw.replace(/^.*:/, '');
+    if (/_end$|end$/i.test(n)) return;
+    const side = sideOf(n);
+    const base = n.replace(/left|right/ig, '').replace(/(^|[_.\s-])[lLrR](?=[_.\s-]|\d|$)/g, '$1')
+      .replace(/([a-z])[LR]$/, '$1').toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const [hn, re] of table) {
+      const sided = !['Hips', 'Spine', 'Chest', 'UpperChest', 'Neck', 'Head'].includes(hn);
+      if (sided !== !!side || !re.test(base)) continue;
+      const key = sided ? side + hn : hn;
+      if (out[key] == null) out[key] = i;
+    }
+    const fm = /^(?:hand)?(thumb|index|middle|ring|little|pinky)(?:finger)?(proximal|intermediate|distal|\d)?$/.exec(base);
+    if (fm && side) fingerBones.push([side, fingers[fm[1]], fm[2], i]);
+  });
+  // 指: 名前の番号（0 始まりも 1 始まりもある）か、根元からの順
+  for (const side of ['Left', 'Right']) for (const f of Object.values(fingers)) {
+    const list = fingerBones.filter(x => x[0] === side && x[1] === f);
+    if (!list.length) continue;
+    const nums = list.map(x => (x[2] in segNames ? segNames[x[2]] : x[2] != null ? Number(x[2]) : null));
+    const min = Math.min(...nums.filter(v => v != null));
+    list.forEach((x, k) => {
+      const seg = nums[k] != null ? nums[k] - (x[2] in segNames ? 0 : min) : k;
+      const key = side + f + SEG[seg];
+      if (seg >= 0 && seg < 3 && out[key] == null) out[key] = x[3];
+    });
+  }
+  // 腕・脚は、手先・足先から親をたどって決める（MMD の「足 = 太もも」など、名前だけでは決まらない）
+  const up = i => { let p = M.parent[i]; while (p >= 0 && /twist|roll|捩/i.test(M.names[p])) p = M.parent[p]; return p; };
+  for (const side of ['Left', 'Right']) {
+    for (const [end, mid, top] of [['Hand', 'LowerArm', 'UpperArm'], ['Foot', 'LowerLeg', 'UpperLeg']]) {
+      const c = out[side + end];
+      if (c == null) continue;
+      const b = up(c), a = b >= 0 ? up(b) : -1;
+      if (b >= 0) out[side + mid] = b;
+      if (a >= 0) out[side + top] = a;
+    }
+  }
+  return out;
+}
+
+/** 左右の相手（名前の L/R を入れ替えた骨）。無ければ自分。 */
+function partnerOf(i) {
+  if (!M.partner) {
+    M.partner = M.names.map((n, j) => {
+      const cands = [
+        n.replace(/Left/g, 'Right'), n.replace(/Right/g, 'Left'), n.replace(/left/g, 'right'), n.replace(/right/g, 'left'),
+        n.replace(/(^|[_.\s-])L(?=[_.\s-]|\d|$)/g, '$1R'), n.replace(/(^|[_.\s-])R(?=[_.\s-]|\d|$)/g, '$1L'),
+        n.replace(/(^|[_.\s-])l(?=[_.\s-]|\d|$)/g, '$1r'), n.replace(/(^|[_.\s-])r(?=[_.\s-]|\d|$)/g, '$1l'),
+        n.replace(/([a-z])L$/, '$1R'), n.replace(/([a-z])R$/, '$1L'),
+      ];
+      for (const c of cands) if (c !== n && M.byName.has(c)) return M.byName.get(c);
+      return j;
+    });
+  }
+  return M.partner[i];
+}
+
+function frameCamera() {
+  const box = new THREE.Box3();
+  for (const p of M.restWP) box.expandByPoint(p);
+  const c = box.getCenter(new THREE.Vector3());
+  const h = M.size;
+  orbit.target.copy(c);
+  camera.near = h / 200;
+  camera.far = h * 200;
+  camera.position.set(c.x, c.y + h * 0.05, c.z + h * 2.6);
+  camera.updateProjectionMatrix();
+  orbit.update();
+  scene.remove(grid);
+  grid = new THREE.GridHelper(h * 6, 24, 0x5a5a5a, 0x3a3a3a);
+  scene.add(grid);
+  buildMarkers();
+}
+
+// ================================================================
+//  IK（2 ボーン。肘・膝は、付け根の骨に固定したヒンジでだけ曲げる）
+// ================================================================
+
+const LIMBS = [
+  { key: 'LeftHand', label: '左手', parts: ['LeftUpperArm', 'LeftLowerArm', 'LeftHand'], arm: true },
+  { key: 'RightHand', label: '右手', parts: ['RightUpperArm', 'RightLowerArm', 'RightHand'], arm: true },
+  { key: 'LeftFoot', label: '左足', parts: ['LeftUpperLeg', 'LeftLowerLeg', 'LeftFoot'], arm: false },
+  { key: 'RightFoot', label: '右足', parts: ['RightUpperLeg', 'RightLowerLeg', 'RightFoot'], arm: false },
+];
+
+function modelForward() {
+  for (const s of ['Left', 'Right']) {
+    const f = M.human[s + 'Foot'], t = M.human[s + 'Toes'];
+    if (f != null && t != null) {
+      const d = M.restWP[t].clone().sub(M.restWP[f]);
+      d.y = 0;
+      if (d.lengthSq() > 1e-12) return d.normalize();
+    }
+  }
+  return new THREE.Vector3(0, 0, 1);
+}
+
+function buildLimbs() {
+  for (const L of M.limbs || []) { scene.remove(L.target); scene.remove(L.pole); }
+  M.limbs = [];
+  M.partner = null;
+  const fwd = modelForward();
+  for (const def of LIMBS) {
+    const c = M.human[def.parts[2]];
+    if (c == null) continue;
+    const b = M.human[def.parts[1]] ?? M.parent[c];
+    const a = M.human[def.parts[0]] ?? (b >= 0 ? M.parent[b] : -1);
+    if (a < 0 || b < 0) continue;
+    // 先端が曲げで動く向き: 肘は前、膝は後ろ。ヒンジは付け根の骨の中で固定
+    const flex = def.arm ? fwd.clone() : fwd.clone().negate();
+    const v = M.restWP[c].clone().sub(M.restWP[b]).normalize();
+    let h = v.clone().cross(flex);
+    if (h.lengthSq() < 1e-8) h = v.clone().cross(new THREE.Vector3(0, 1, 0));
+    h.normalize();
+    const hingeInA = h.applyQuaternion(M.restWQ[a].clone().invert());
+    const target = new THREE.Object3D();
+    const pole = new THREE.Object3D();
+    scene.add(target, pole);
+    M.limbs.push({ ...def, a, b, c, hingeInA, target, pole });
+  }
+}
+
+const limbHinge = L => L.hingeInA.clone().applyQuaternion(wq(M.bones[L.a])).normalize();
+
+function syncLimb(L) {
+  const C = M.bones[L.c];
+  L.target.position.copy(wp(C));
+  L.target.quaternion.copy(wq(C));
+  L.target.updateMatrixWorld(true);
+  L.pole.position.copy(defaultPole(L));
+  L.pole.updateMatrixWorld(true);
+}
+function syncLimbs(except) { if (M) for (const L of M.limbs) if (L !== except) syncLimb(L); }
+
+function defaultPole(L) {
+  const a = wp(M.bones[L.a]), b = wp(M.bones[L.b]), c = wp(M.bones[L.c]);
+  const len = a.distanceTo(b) + b.distanceTo(c);
+  const ac = c.clone().sub(a);
+  const mid = a.clone().add(ac.clone().multiplyScalar(b.clone().sub(a).dot(ac) / Math.max(1e-12, ac.lengthSq())));
+  let dir = b.clone().sub(mid);
+  if (dir.length() < len * 0.03) dir = c.clone().sub(b).cross(limbHinge(L)); // まっすぐなら、曲げたときに関節が出る側
+  return b.add(dir.normalize().multiplyScalar(len * 0.5));
+}
+
+function rotateWorld(o, q) { setWorldQuat(o, q.clone().multiply(wq(o))); }
+
+function solveLimb(L) {
+  const A = M.bones[L.a], B = M.bones[L.b], C = M.bones[L.c];
+  const t = L.target.position.clone(), p = L.pole.position.clone();
+  const endQ = L.target.quaternion.clone();
+  const a = wp(A), b = wp(B), c = wp(C);
+  const l1 = a.distanceTo(b), l2 = b.distanceTo(c);
+  const dist = clamp(t.distanceTo(a), Math.abs(l1 - l2) + (l1 + l2) * 1e-4, (l1 + l2) * 0.9999);
+
+  // ① 肘・膝をヒンジまわりに回して、付け根から先端までの距離を dist にする（3D で正確に）
+  const h = limbHinge(L);
+  const w = b.clone().sub(a), v = c.clone().sub(b);
+  const vPar = h.clone().multiplyScalar(v.dot(h)), vPerp = v.clone().sub(vPar);
+  const hxv = h.clone().cross(vPerp);
+  const P = w.dot(vPerp), Q = w.dot(hxv);
+  const Sv = (dist * dist - w.lengthSq() - v.lengthSq()) / 2 - w.dot(vPar);
+  const R0 = Math.hypot(P, Q);
+  if (R0 > 1e-12) {
+    const phi = Math.atan2(Q, P), ac = Math.acos(clamp(Sv / R0, -1, 1));
+    const u = w.clone().normalize();
+    let best = null;
+    for (let th of [phi + ac, phi - ac]) {
+      th = Math.atan2(Math.sin(th), Math.cos(th));
+      const vr = v.clone().applyAxisAngle(h, th);
+      const flex = Math.atan2(h.dot(u.clone().cross(vr)), u.dot(vr)); // 曲げ（正）か反り（負）か
+      const score = (flex >= -1e-3 ? 0 : 10) + Math.abs(th);
+      if (!best || score < best.score) best = { th, score };
+    }
+    rotateWorld(B, new THREE.Quaternion().setFromAxisAngle(h, best.th));
+  }
+  // ② 付け根から振って、先端を目標へ
+  const from = wp(C).sub(a).normalize(), to = t.clone().sub(a).normalize();
+  rotateWorld(A, new THREE.Quaternion().setFromUnitVectors(from, to));
+  // ③ 付け根→目標の軸まわりにねじって、肘・膝をポールの側へ
+  const bp = wp(B).sub(a), pp = p.sub(a);
+  bp.sub(to.clone().multiplyScalar(bp.dot(to)));
+  pp.sub(to.clone().multiplyScalar(pp.dot(to)));
+  if (bp.lengthSq() > 1e-14 && pp.lengthSq() > 1e-14) {
+    const ang = Math.atan2(to.dot(bp.clone().cross(pp)), bp.dot(pp));
+    rotateWorld(A, new THREE.Quaternion().setFromAxisAngle(to, ang));
+  }
+  // ④ 手先・足先のワールドの向きは保つ
+  setWorldQuat(C, endQ);
+  S.edited.add(L.a); S.edited.add(L.b); S.edited.add(L.c);
+}
+
+// ================================================================
+//  人型の骨の自由度。Unity の Humanoid で表せない回し方（肘の横曲げ、肩や指のねじり、足首の横倒し）は、
+//  マッスルにするときに別の骨のねじりに置き換わって、形が変わる。HTML でも同じ範囲に収めておく
+// ================================================================
+
+/** 親の骨の元のポーズの向き（ワールド）の逆。ローカルの回転はこの向きで表される。 */
+const parentRestInv = i => M.restWQ[i].clone().multiply(M.restQ[i].clone().invert()).invert();
+const toParentFrame = (i, v) => v.clone().applyQuaternion(parentRestInv(i)).normalize();
+
+function buildDof() {
+  M.dof = new Map();
+  M.dofWorld = new Map(); // 確認用: 元のポーズでのワールドの軸
+  const H = M.human;
+  const dirTo = (i, j) => M.restWP[j].clone().sub(M.restWP[i]);
+  const ownDir = i => {
+    const c = M.children[i].find(k => M.restWP[k].distanceToSquared(M.restWP[i]) > 1e-10);
+    return c != null ? dirTo(i, c) : dirTo(M.parent[i], i);
+  };
+  const perp = (v, to) => { const t = to.clone().normalize(); return v.clone().sub(t.multiplyScalar(v.dot(t))).normalize(); };
+  const set = (i, kind, axisW, hingeW) => {
+    M.dof.set(i, { kind, axis: toParentFrame(i, axisW), hinge: hingeW ? toParentFrame(i, hingeW) : null });
+    M.dofWorld.set(i, { kind, axis: axisW.clone().normalize(), hinge: hingeW ? hingeW.clone().normalize() : null });
+  };
+  // 肘・膝: 曲げ（ヒンジ）と骨の軸まわりのねじり
+  for (const L of M.limbs) set(L.b, 'hingeTwist', dirTo(L.b, L.c), limbHingeRest(L));
+  // Unity が測った軸があれば、それで決める（指などは骨の形からの推測が数度ずれる）
+  if (M.unityAxes?.size) {
+    for (const s of ['Left', 'Right']) {
+      const names = [s + 'Shoulder', s + 'Toes'];
+      for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Little']) for (const g of ['Proximal', 'Intermediate', 'Distal']) names.push(s + f + g);
+      for (const hn of names) {
+        const i = H[hn], ax = i != null ? M.unityAxes.get(i) : null;
+        if (!ax) continue;
+        if (ax.length === 1) set(i, 'hinge', ownDir(i), ax[0]);
+        else if (ax.length === 2) set(i, 'swing', ax[0].clone().cross(ax[1]));
+      }
+    }
+    return;
+  }
+  for (const s of ['Left', 'Right']) {
+    // 肩: ねじれない
+    if (H[s + 'Shoulder'] != null) set(H[s + 'Shoulder'], 'swing', ownDir(H[s + 'Shoulder']));
+    // つま先: 横の軸（膝と同じ）まわりの曲げだけ
+    const toe = H[s + 'Toes'], leg = M.limbs.find(L => L.key === s + 'Foot');
+    if (toe != null && leg) set(toe, 'hinge', ownDir(toe), limbHingeRest(leg));
+    // 指: 付け根はねじれない、第 2・第 3 関節は曲げだけ。
+    // 曲げの軸は、親指以外は指の付け根を結ぶ線、親指は手のひらの法線（どちらも指の向きに直交させる）
+    const hand = H[s + 'Hand'], ip = H[s + 'IndexProximal'], lp = H[s + 'LittleProximal'] ?? H[s + 'RingProximal'];
+    const knuckles = ip != null && lp != null ? dirTo(lp, ip) : null;
+    const palm = hand != null && knuckles ? dirTo(hand, ip).cross(dirTo(hand, lp)) : null;
+    for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Little']) {
+      const prox = H[s + f + 'Proximal'];
+      if (prox != null) set(prox, 'swing', ownDir(prox));
+      for (const g of ['Intermediate', 'Distal']) {
+        const i = H[s + f + g];
+        if (i == null) continue;
+        const dir = ownDir(i);
+        const base = f === 'Thumb' ? palm : knuckles;
+        if (base && base.lengthSq() > 1e-12 && perp(base, dir).lengthSq() > 0.5) set(i, 'hinge', dir, perp(base, dir));
+        else set(i, 'swing', dir);
+      }
+    }
+  }
+}
+
+function limbHingeRest(L) { return L.hingeInA.clone().applyQuaternion(M.restWQ[L.a]).normalize(); }
+
+/**
+ * Unity が測ったマッスルの回転軸（json の axes）を使う。モデルごとにブラウザに覚えておき、次から FBX だけ開いても使う。
+ * 軸は元のポーズでのワールドの向き（three.js の向き）。
+ */
+function setUnityInfo(obj, remember = true) {
+  if (!M || !obj || !Array.isArray(obj.axes) || !obj.axes.length) return false;
+  const map = new Map();
+  for (const e of obj.axes) {
+    const i = M.byName.get(e.bone);
+    if (i == null || !Array.isArray(e.axes) || e.axes.length < 3) continue;
+    const ax = [];
+    for (let k = 0; k + 2 < e.axes.length; k += 3) ax.push(new THREE.Vector3(e.axes[k], e.axes[k + 1], e.axes[k + 2]).normalize());
+    map.set(i, ax);
+  }
+  if (map.size < 10) return false;
+  M.unityAxes = map;
+  M.unityInfo = { axes: obj.axes, twist: obj.twist || null, unityRest: obj.unityRest || null, zeroPose: obj.zeroPose || null };
+
+  // 肘・膝のヒンジも Unity の曲げの軸に（向きの正負は今のヒンジにそろえる）
+  for (const L of M.limbs) {
+    const ax = map.get(L.b);
+    if (!ax || ax.length < 2) continue;
+    const bone = M.restWP[L.c].clone().sub(M.restWP[L.b]).normalize();
+    const hinge = ax.reduce((best, a) => (Math.abs(a.dot(bone)) < Math.abs(best.dot(bone)) ? a : best)).clone();
+    if (hinge.dot(limbHingeRest(L)) < 0) hinge.negate();
+    L.hingeInA = hinge.applyQuaternion(M.restWQ[L.a].clone().invert());
+  }
+  buildDof();
+  buildUnityView();
+  if (remember) { try { localStorage.setItem('motiontool.model:' + M.name, JSON.stringify(M.unityInfo)); } catch (e) { /* 覚えられなくても動く */ } }
+  return true;
+}
+function loadRememberedInfo() {
+  try {
+    const t = localStorage.getItem('motiontool.model:' + M.name);
+    if (t) return setUnityInfo(JSON.parse(t), false);
+  } catch (e) { /* 無ければ推測のまま */ }
+  return false;
+}
+
+// ================================================================
+//  Unity で再生したときの骨の向き（表示のときだけ掛ける。キーや書き出しは回したままの値）
+//
+//  Humanoid は腕・脚のねじりを上下の骨に分けて持つ（実測）:
+//    上の骨（上腕・太もも）のねじり T1 → 上の骨は (1-k1)·T1 だけ回り、残りは肘・膝の所で下の骨に掛かる
+//    下の骨と先端のねじりの合計 T2 → 下の骨は (1-k2)·T2、先端（手・足）のワールドの向きは変わらない
+//  関節の位置は変わらず、骨の軸まわりの回り方（袖や肌のねじれ方）だけが変わる。
+//  指などは元のポーズそのものが Humanoid で表せず、再生すると軸まわりに少し回る（unityRest）。それも表示に入れる
+// ================================================================
+
+function buildUnityView() {
+  if (!M) return;
+  const tw = M.unityInfo?.twist;
+  // マッスルが全部 0 の姿を一度骨に掛けて、上腕・太もものローカルの回転を取る
+  const zeroLocal = new Map();
+  if (M.unityInfo?.zeroPose) {
+    const saved = savePose();
+    applyRest();
+    const list = M.unityInfo.zeroPose.map(e => [M.byName.get(e.bone), e.q]).filter(([i]) => i != null).sort((x, y) => M.depth[x[0]] - M.depth[y[0]]);
+    for (const [i, q] of list) setWorldQuat(M.bones[i], new THREE.Quaternion().fromArray(q).multiply(M.restWQ[i]));
+    for (const [i] of list) zeroLocal.set(i, M.bones[i].quaternion.clone());
+    restorePose(saved);
+  }
+  for (const L of M.limbs) {
+    L.view = null;
+    const A = M.bones[L.a], B = M.bones[L.b], C = M.bones[L.c];
+    if (B.parent !== A || C.parent !== B) continue; // 間に別の骨があるモデルは、そのまま表示する
+    const pick = (i, dir) => {
+      const ax = M.unityAxes?.get(i);
+      if (!ax) return dir.clone().normalize();
+      const best = ax.reduce((x, a) => (Math.abs(a.dot(dir)) > Math.abs(x.dot(dir)) ? a : x));
+      return best.clone().multiplyScalar(best.dot(dir) < 0 ? -1 : 1);
+    };
+    const axisU = pick(L.a, M.restWP[L.b].clone().sub(M.restWP[L.a]));
+    const axisL = pick(L.b, M.restWP[L.c].clone().sub(M.restWP[L.b]));
+    const hinge = limbHingeRest(L);
+    // 先端（手・足）のねじりの軸: Unity が持つ 2 つの軸のどちらでもない向き。腕では前腕の軸と同じ、脚ではすねの軸から少し傾く
+    const axC = M.unityAxes?.get(L.c);
+    let axisE = axisL.clone();
+    if (axC && axC.length === 2) {
+      axisE = axC[0].clone().cross(axC[1]).normalize();
+      if (axisE.dot(axisL) < 0) axisE.negate();
+    }
+    L.view = {
+      uA: toParentFrame(L.a, axisU), uB: toParentFrame(L.b, axisU), hB: toParentFrame(L.b, hinge),
+      lB: toParentFrame(L.b, axisL), lC: toParentFrame(L.c, axisL), mC: toParentFrame(L.c, axisE),
+      k1: tw ? tw[L.arm ? 0 : 2] : 0.5, k2: tw ? tw[L.arm ? 1 : 3] : 0.5,
+    };
+    // 上の骨のねじりを Unity と同じ測り方にする: マッスル 0 の姿から「骨の軸の向きを最短で振った」残りが、ねじり。
+    // 元のポーズからの差で測ると、腕のように 0 の姿から大きく振れている骨では、振りの分がねじりに混ざる（数十度）
+    const r0 = zeroLocal.get(L.a);
+    if (r0) {
+      const xl = axisU.clone().applyQuaternion(M.restWQ[L.a].clone().invert()).normalize(); // 骨のローカルでのねじりの軸
+      const v = L.view;
+      v.r0 = r0;
+      v.xl = xl;
+      v.z0 = xl.clone().applyQuaternion(r0).normalize();
+      v.tauRest = upperTwist(v, M.restQ[L.a]).tau;
+    }
+  }
+  M.lowerView = new Map(M.limbs.filter(L => L.view).map(L => [L.b, L.view]));
+  docVer++;
+  // 指などは、元のポーズそのものが Humanoid で表せず、再生すると骨の軸まわりに少し回る（親指で 13° など）。
+  // その回り（骨のローカルの向きで持つ）を、表示のときに足す。Unity が書いた骨は読み込むときにこの回りを引いておく（unityBonesToRaw）。
+  // 「Unity での向きを基準に曲げ直す」方式も試したが、実測ではこちらの方が合った（指先 0.2 mm・0.6° に対し 1.3 mm・1.9°）
+  M.restOffset = new Map();
+  for (const e of M.unityInfo?.unityRest || []) {
+    const i = M.byName.get(e.bone);
+    if (i == null || !Array.isArray(e.q)) continue;
+    const kw = new THREE.Quaternion().fromArray(e.q);
+    M.restOffset.set(i, M.restWQ[i].clone().invert().multiply(kw).multiply(M.restWQ[i]).normalize());
+  }
+}
+
+/** 骨 i の、表示で足す回り。親の回りは打ち消す（子のワールドの向きが、回りを足した分だけ変わるように）。 */
+function restOffsetLocals(inverse) {
+  const next = [];
+  const parentK = i => { const p = M.parent[i]; return p >= 0 && M.bones[i].parent === M.bones[p] ? M.restOffset.get(p) : null; };
+  for (const [i, k] of M.restOffset) {
+    const kp = parentK(i);
+    // 表示: Kp⁻¹ · q · K。読み込み（逆）: Kp · q · K⁻¹
+    const q = inverse ? M.bones[i].quaternion.clone().multiply(k.clone().invert()) : M.bones[i].quaternion.clone().multiply(k);
+    if (kp) q.premultiply(inverse ? kp : kp.clone().invert());
+    next.push([i, q.normalize()]);
+  }
+  // 親だけが回る人型の骨は、親の回りを打ち消して向きを保つ
+  for (const [i, k] of M.restOffset) {
+    for (const c of M.children[i]) {
+      if (M.restOffset.has(c) || M.bones[c].parent !== M.bones[i] || !M.humanSet.has(c)) continue;
+      next.push([c, (inverse ? k.clone() : k.clone().invert()).multiply(M.bones[c].quaternion).normalize()]);
+    }
+  }
+  return next;
+}
+
+/** Unity が書いた骨（再生したときの向き）から、表示で足す回りを引く。 */
+function unityBonesToRaw() {
+  if (!M.restOffset?.size) return;
+  for (const [i, q] of restOffsetLocals(true)) M.bones[i].quaternion.copy(q);
+  M.root.updateMatrixWorld(true);
+}
+
+const axisAngleQ = (axis, angle) => new THREE.Quaternion().setFromAxisAngle(axis, angle);
+/** q を axis まわりのねじりと残りに分けたときの、ねじりの角度（符号つき）。 */
+function twistAngle(q, axis) {
+  const d = q.x * axis.x + q.y * axis.y + q.z * axis.z;
+  let a = 2 * Math.atan2(d, q.w);
+  if (a > Math.PI) a -= 2 * Math.PI;
+  if (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
+/** 上の骨のローカルの回転 q を、Unity と同じく「0 の姿からの最短の振り」と「軸まわりのねじり」に分ける。 */
+function upperTwist(v, q) {
+  const u = v.xl.clone().applyQuaternion(q).normalize();
+  const arc = new THREE.Quaternion().setFromUnitVectors(v.z0, u);
+  const rest = arc.clone().invert().multiply(q).multiply(v.r0.clone().invert());
+  return { arc, tau: twistAngle(rest, v.z0) };
+}
+
+/**
+ * 前腕・すねの回し方（元のポーズからの差分 dB）を 3 つの角度に分ける:
+ * 上の骨の軸まわり（曲げる面の向き rho）→ ヒンジの曲げ theta → 自分の軸まわりのねじり b。
+ */
+function lowerAngles(v, dB) {
+  const dir = v.lB.clone().applyQuaternion(dB);
+  const hl = v.hB.dot(v.lB), hu = v.hB.dot(v.uB);
+  const pa = v.lB.dot(v.uB) - hl * hu, pb = v.hB.clone().cross(v.lB).dot(v.uB), pc = dir.dot(v.uB) - hl * hu;
+  const pr = Math.hypot(pa, pb);
+  let theta = 0;
+  if (pr > 1e-9) {
+    const base = Math.atan2(pb, pa), ac = Math.acos(clamp(pc / pr, -1, 1));
+    const guess = hingeAngle(dB, v.lB, v.hB);
+    const wrap = x => Math.atan2(Math.sin(x), Math.cos(x));
+    const c1 = wrap(base + ac), c2 = wrap(base - ac);
+    theta = Math.abs(c1 - guess) < Math.abs(c2 - guess) ? c1 : c2;
+  }
+  const e = v.lB.clone().applyAxisAngle(v.hB, theta);
+  const ep = e.clone().sub(v.uB.clone().multiplyScalar(e.dot(v.uB))), dp = dir.clone().sub(v.uB.clone().multiplyScalar(dir.dot(v.uB)));
+  // まっすぐに近いと曲げる面が決まらない（少しの外れが大きな角度になる）ので、面は回っていないことにする
+  const rho = ep.lengthSq() > 3e-3 && dp.lengthSq() > 3e-3 ? Math.atan2(v.uB.dot(ep.clone().cross(dp)), ep.dot(dp)) : 0;
+  const rem = axisAngleQ(v.uB, rho).multiply(axisAngleQ(v.hB, theta)).invert().multiply(dB);
+  return { rho, theta, b: twistAngle(rem, v.lB) };
+}
+const lowerQuat = (v, rho, theta, b, rest, out) =>
+  out.copy(axisAngleQ(v.uB, rho)).multiply(axisAngleQ(v.hB, theta)).multiply(axisAngleQ(v.lB, b)).multiply(rest).normalize();
+
+/** 腕・脚 1 本の、今の回し方を「上のねじり T1・曲げ・下のねじり T2」に読む。 */
+function analyzeLimb(L) {
+  const v = L.view;
+  const qA = M.bones[L.a].quaternion, qB = M.bones[L.b].quaternion, qC = M.bones[L.c].quaternion;
+  const dA = qA.clone().multiply(M.restQ[L.a].clone().invert());
+  let sA = swingTwist(dA, v.uA).swing, a = twistAngle(dA, v.uA), arc = null;
+  if (v.r0) { const r = upperTwist(v, qA); arc = r.arc; a = r.tau - v.tauRest; }
+  const { rho, theta, b } = lowerAngles(v, qB.clone().multiply(M.restQ[L.b].clone().invert()));
+  // 先端（手・足）のねじり
+  const dC = qC.clone().multiply(M.restQ[L.c].clone().invert());
+  const c = twistAngle(dC, v.mC);
+  // ねじりの合計は ±180° の範囲で数える（Unity のマッスルと同じ側に取る）
+  const wrap = x => Math.atan2(Math.sin(x), Math.cos(x));
+  return { sA, arc, theta, t1: wrap(a + rho), t2: wrap(b + c) };
+}
+
+/**
+ * 骨を Unity で再生したときの向きにする。戻り値を restoreUnityView に渡すと元に戻る。
+ * k1・k2 を指定すると、ねじりの分け方を変えられる（確認用）。
+ */
+function applyUnityView() {
+  if (!M || !M.limbs) return null;
+  const saved = [];
+  const keep = i => saved.push([i, M.bones[i].quaternion.clone()]);
+  for (const L of M.limbs) {
+    if (!L.view) continue;
+    const v = L.view, A = M.bones[L.a], B = M.bones[L.b], C = M.bones[L.c];
+    const r = analyzeLimb(L);
+    const qA = (r.arc
+      ? r.arc.clone().multiply(axisAngleQ(v.z0, v.tauRest + (1 - v.k1) * r.t1)).multiply(v.r0)
+      : r.sA.clone().multiply(axisAngleQ(v.uA, (1 - v.k1) * r.t1)).multiply(M.restQ[L.a])).normalize();
+    const qB = axisAngleQ(v.uB, v.k1 * r.t1).multiply(axisAngleQ(v.hB, r.theta)).multiply(axisAngleQ(v.lB, (1 - v.k2) * r.t2)).multiply(M.restQ[L.b]).normalize();
+    // 先端のワールドの向きは変えない（実測。足首のねじりの残りを足首の軸で持たせると、かえって 7〜8° ずれた）
+    const chain = A.quaternion.clone().multiply(B.quaternion).multiply(C.quaternion);
+    const qC = qB.clone().invert().multiply(qA.clone().invert()).multiply(chain).normalize();
+    keep(L.a); keep(L.b); keep(L.c);
+    A.quaternion.copy(qA); B.quaternion.copy(qB); C.quaternion.copy(qC);
+  }
+  if (M.restOffset?.size) {
+    const changed = new Set(saved.map(x => x[0]));
+    for (const [i, q] of restOffsetLocals(false)) {
+      if (!changed.has(i)) { keep(i); changed.add(i); }
+      M.bones[i].quaternion.copy(q);
+    }
+  }
+  M.root.updateMatrixWorld(true);
+  return saved;
+}
+function restoreUnityView(saved) {
+  if (!saved) return;
+  for (const [i, q] of saved) M.bones[i].quaternion.copy(q);
+  M.root.updateMatrixWorld(true);
+}
+
+function swingTwist(q, axis) {
+  const d = q.x * axis.x + q.y * axis.y + q.z * axis.z;
+  const twist = new THREE.Quaternion(axis.x * d, axis.y * d, axis.z * d, q.w);
+  if (twist.lengthSq() < 1e-12) twist.identity(); else twist.normalize();
+  return { swing: q.clone().multiply(twist.clone().invert()), twist };
+}
+
+/** 骨の向き（axis の先）を、ヒンジまわりの回転だけで近づけたときの角度。 */
+function hingeAngle(delta, axis, hinge) {
+  const dir = axis.clone().applyQuaternion(delta);
+  dir.sub(hinge.clone().multiplyScalar(dir.dot(hinge)));
+  return dir.lengthSq() > 1e-12 ? Math.atan2(hinge.dot(axis.clone().cross(dir)), axis.dot(dir)) : 0;
+}
+
+/**
+ * 骨のローカルの回転を、その骨の自由度に収める。変えたら true。
+ * swing: 骨の軸まわりのねじりを除く / hinge: ヒンジまわりの曲げだけ / hingeTwist: 曲げ＋骨の軸まわりのねじり（反る向きは少しだけ）
+ */
+function constrainBone(i) {
+  const d = M.dof?.get(i);
+  if (!d) return false;
+  const b = M.bones[i];
+  const delta = b.quaternion.clone().multiply(M.restQ[i].clone().invert());
+  let out;
+  if (d.kind === 'swing') out = swingTwist(delta, d.axis).swing;
+  else if (d.kind === 'hinge') out = new THREE.Quaternion().setFromAxisAngle(d.hinge, hingeAngle(delta, d.axis, d.hinge));
+  else {
+    // 反る向きにはほとんど曲がらないようにする
+    const v = M.lowerView?.get(i);
+    if (v) {
+      // 補間や Unity の読み方と同じ分け方で、曲げとねじりだけを残す（曲げる面は回さない）
+      const r = lowerAngles(v, delta);
+      out = axisAngleQ(v.hB, clamp(r.theta, -0.09, 2.7)).multiply(axisAngleQ(v.lB, r.b));
+    } else {
+      const th = clamp(hingeAngle(delta, d.axis, d.hinge), -0.09, 2.7);
+      out = new THREE.Quaternion().setFromAxisAngle(d.hinge, th).multiply(swingTwist(delta, d.axis).twist);
+    }
+  }
+  const q = out.multiply(M.restQ[i]).normalize();
+  if (Math.abs(q.dot(b.quaternion)) > 1 - 1e-10) return false;
+  b.quaternion.copy(q);
+  b.updateMatrixWorld(true);
+  return true;
+}
+
+function isAncestor(i, j) { for (let p = M.parent[j]; p >= 0; p = M.parent[p]) if (p === i) return true; return false; }
+function limbOfBone(i) { return M.limbs.find(L => L.a === i || L.b === i || L.c === i); }
+
+// ================================================================
+//  キーと補間
+// ================================================================
+
+function track(i) {
+  let t = D.tracks.get(i);
+  if (!t) { t = { keys: [] }; D.tracks.set(i, t); }
+  return t;
+}
+
+function insertKey(keys, k) {
+  const at = keys.findIndex(x => x.f >= k.f);
+  if (at < 0) keys.push(k);
+  else if (keys[at].f === k.f) keys[at] = k;
+  else keys.splice(at, 0, k);
+}
+
+function setKey(i, f) {
+  const b = M.bones[i];
+  insertKey(track(i).keys, { f, q: b.quaternion.clone(), p: i === M.hips ? b.position.clone() : null });
+}
+
+function keyBones(list, shapes = []) {
+  if (!M || (!list.length && !shapes.length)) return;
+  for (const i of list) setKey(i, S.frame);
+  for (const i of list) S.edited.delete(i);
+  for (const id of shapes) {
+    insertKey(shapeTrack(id).keys, { f: S.frame, v: shapeValue(id) });
+    S.shapeEdited.delete(id);
+  }
+  docVer++;
+  markDirty();
+  refreshKeysUI();
+}
+const keyShapes = ids => keyBones([], ids);
+
+/** 実際にカーブにするキー列（ClipBuilder.EffectiveKeys と同じ）。0 と最終フレームに前後のキーの値を置く。 */
+function effectiveKeys(keys, copy) {
+  const last = D.frameCount;
+  const ks = keys.filter(k => k.f >= 0 && k.f <= last).map(k => copy(k, k.f, D.interp.get(k.f) ?? 0));
+  if (ks.length) {
+    if (D.loop && ks[0].f === 0 && ks[ks.length - 1].f !== last) ks.push(copy(ks[0], last, ks[0].mode));
+    if (ks[0].f > 0) ks.unshift(copy(ks[0], 0, 2));
+    if (ks[ks.length - 1].f < last) ks.push(copy(ks[ks.length - 1], last, 0));
+  }
+  return ks;
+}
+
+/**
+ * 成分ごとの接線。Unity の ClampedAuto と同じ（実測で確かめた式）:
+ * 前後のキーを結ぶ傾きを、4 × min(前との差, 次との差) ÷ 前後のキーの時間差 で抑える。山・谷・平らなところと両端は 0。
+ */
+function autoTangents(ks, y) {
+  const n = ks.length, m = new Array(n).fill(0);
+  for (let j = 1; j < n - 1; j++) {
+    const a = y[j] - y[j - 1], b = y[j + 1] - y[j];
+    if (a * b <= 0) continue;
+    const dt = ks[j + 1].f - ks[j - 1].f;
+    const s = (y[j + 1] - y[j - 1]) / dt;
+    m[j] = Math.sign(s) * Math.min(Math.abs(s), 4 * Math.min(Math.abs(a), Math.abs(b)) / dt);
+  }
+  return m;
+}
+
+/**
+ * 回転は「元のポーズからの回し方」を回転ベクトル（軸 × 角度）にして補間する。
+ * Unity のマッスルはほぼ角度なので、クォータニオンの成分で補間するより Unity の再生に近い。
+ */
+function rotVecOf(q, rest) {
+  const d = q.clone().multiply(rest.clone().invert());
+  if (d.w < 0) d.set(-d.x, -d.y, -d.z, -d.w);
+  const s = Math.hypot(d.x, d.y, d.z);
+  if (s < 1e-12) return [0, 0, 0];
+  const k = 2 * Math.atan2(s, d.w) / s;
+  return [d.x * k, d.y * k, d.z * k];
+}
+function quatOfRotVec(x, y, z, rest, out) {
+  const a = Math.hypot(x, y, z);
+  if (a < 1e-12) return out.copy(rest);
+  const k = Math.sin(a / 2) / a;
+  return out.set(x * k, y * k, z * k, Math.cos(a / 2)).multiply(rest).normalize();
+}
+
+/**
+ * lower: 前腕・すねのとき、その腕・脚の view。回転ベクトルの代わりに「面の向き・曲げ・ねじり」の 3 つの角度で補間する。
+ * 回転ベクトルで補間すると、キーの間で前腕が曲げの面からわずかに外れ、肘がまっすぐに近いときに
+ * Unity がそれを上腕の大きなねじりとして読む（数十度）。
+ */
+function prepTrack(t, rest, lower) {
+  if (t.ver === docVer) return t.cache;
+  const ks = effectiveKeys(t.keys, (k, f, mode) => ({ f, q: k.q.clone(), p: k.p ? k.p.clone() : null, mode }));
+  let rv;
+  if (lower) {
+    rv = ks.map(k => { const r = lowerAngles(lower, k.q.clone().multiply(rest.clone().invert())); return [r.rho, r.theta, r.b]; });
+    // 角度は前のキーから近い側へ（±360° の取り方）
+    for (let i = 1; i < rv.length; i++) for (const c of [0, 2]) {
+      while (rv[i][c] - rv[i - 1][c] > Math.PI) rv[i][c] -= 2 * Math.PI;
+      while (rv[i][c] - rv[i - 1][c] < -Math.PI) rv[i][c] += 2 * Math.PI;
+    }
+  } else {
+    rv = ks.map(k => rotVecOf(k.q, rest));
+    // 180° をまたぐときは、前のキーに近い側の表し方にそろえる
+    for (let i = 1; i < rv.length; i++) {
+      const a = Math.hypot(...rv[i]);
+      if (a < 1e-9) continue;
+      const alt = rv[i].map(v => v * (1 - 2 * Math.PI / a));
+      const d0 = rv[i].reduce((s, v, c) => s + (v - rv[i - 1][c]) ** 2, 0), d1 = alt.reduce((s, v, c) => s + (v - rv[i - 1][c]) ** 2, 0);
+      if (d1 < d0) rv[i] = alt;
+    }
+  }
+  const vals = [], tans = [];
+  for (let c = 0; c < 6; c++) {
+    const y = ks.map((k, i) => c < 3 ? rv[i][c] : (k.p ? k.p.toArray()[c - 3] : 0));
+    vals.push(y);
+    tans.push(autoTangents(ks, y));
+  }
+  t.cache = { ks, vals, tans, rest };
+  t.ver = docVer;
+  return t.cache;
+}
+
+/** f を含む区間の始まりのキー。前なら -1、後ろなら最後のキー。 */
+function segmentAt(ks, f) {
+  const n = ks.length;
+  if (f <= ks[0].f) return -1;
+  if (f >= ks[n - 1].f) return n - 1;
+  let i = 0;
+  while (i < n - 2 && ks[i + 1].f <= f) i++;
+  return i;
+}
+const hermite = (u, dt, y0, m0, y1, m1) => {
+  const u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * y0 + (u3 - 2 * u2 + u) * dt * m0 + (-2 * u3 + 3 * u2) * y1 + (u3 - u2) * dt * m1;
+};
+
+/** f は小数でもよい（再生中）。 */
+function evalTrack(t, rest, f, outQ, outP, lower) {
+  const { ks, vals, tans } = prepTrack(t, rest, lower);
+  const n = ks.length;
+  if (!n) return false;
+  const i = segmentAt(ks, f);
+  if (i < 0 || i >= n - 1) {
+    const k = ks[Math.max(0, i)];
+    outQ.copy(k.q);
+    if (k.p && outP) outP.copy(k.p);
+    return !!k.p;
+  }
+  const k0 = ks[i], k1 = ks[i + 1];
+  const dt = k1.f - k0.f, u = (f - k0.f) / dt;
+  let e;
+  if (k0.mode === 2) {
+    outQ.copy(k0.q);
+    if (k0.p && outP) outP.copy(k0.p);
+    return !!k0.p;
+  }
+  if (k0.mode === 1) e = c => vals[c][i] + (vals[c][i + 1] - vals[c][i]) * u;
+  else e = c => hermite(u, dt, vals[c][i], tans[c][i], vals[c][i + 1], tans[c][i + 1]);
+  if (lower) lowerQuat(lower, e(0), e(1), e(2), rest, outQ);
+  else quatOfRotVec(e(0), e(1), e(2), rest, outQ);
+  if (k0.p && outP) outP.set(e(3), e(4), e(5));
+  return !!k0.p;
+}
+
+// ---------- シェイプキー（値は Unity と同じ 0〜100） ----------
+
+function shapeTrack(id) {
+  let t = D.shapes.get(id);
+  if (!t) { t = { keys: [] }; D.shapes.set(id, t); }
+  return t;
+}
+function shapeValue(id) {
+  const s = M.shapeById.get(id);
+  return s ? s.mesh.morphTargetInfluences[s.idx] * 100 : 0;
+}
+function setShapeValue(id, v) {
+  const s = M.shapeById.get(id);
+  if (s) s.mesh.morphTargetInfluences[s.idx] = clamp(v, -100, 200) / 100;
+}
+function prepShape(t) {
+  if (t.ver === docVer) return t.cache;
+  const ks = effectiveKeys(t.keys, (k, f, mode) => ({ f, v: k.v, mode }));
+  const y = ks.map(k => k.v);
+  t.cache = { ks, y, m: autoTangents(ks, y) };
+  t.ver = docVer;
+  return t.cache;
+}
+function evalShape(t, f) {
+  const { ks, y, m } = prepShape(t);
+  const n = ks.length;
+  if (!n) return 0;
+  const i = segmentAt(ks, f);
+  if (i < 0 || i >= n - 1) return ks[Math.max(0, i)].v;
+  const k0 = ks[i], k1 = ks[i + 1], dt = k1.f - k0.f, u = (f - k0.f) / dt;
+  if (k0.mode === 2) return k0.v;
+  if (k0.mode === 1) return k0.v + (k1.v - k0.v) * u;
+  return hermite(u, dt, y[i], m[i], y[i + 1], m[i + 1]);
+}
+
+/** 骨とシェイプをキーのとおりにする（キーの無いものは元のまま）。 */
+function poseAt(f) {
+  for (let i = 0; i < M.bones.length; i++) {
+    const b = M.bones[i], t = D.tracks.get(i);
+    if (t && t.keys.length) {
+      if (!evalTrack(t, M.restQ[i], f, b.quaternion, b.position, M.lowerView?.get(i))) b.position.copy(M.restP[i]);
+    } else {
+      b.quaternion.copy(M.restQ[i]);
+      b.position.copy(M.restP[i]);
+    }
+  }
+  for (const s of M.shapes) {
+    const t = D.shapes.get(s.id);
+    s.mesh.morphTargetInfluences[s.idx] = t && t.keys.length ? evalShape(t, f) / 100 : 0;
+  }
+  M.root.updateMatrixWorld(true);
+}
+
+function applyRest() {
+  M.bones.forEach((b, i) => { b.quaternion.copy(M.restQ[i]); b.position.copy(M.restP[i]); });
+  M.root.updateMatrixWorld(true);
+}
+
+function savePose() {
+  const s = M.bones.map(b => [b.quaternion.clone(), b.position.clone()]);
+  s.shapes = M.shapes.map(x => x.mesh.morphTargetInfluences[x.idx]);
+  return s;
+}
+function restorePose(s) {
+  M.bones.forEach((b, i) => { b.quaternion.copy(s[i][0]); b.position.copy(s[i][1]); });
+  if (s.shapes) M.shapes.forEach((x, k) => { x.mesh.morphTargetInfluences[x.idx] = s.shapes[k]; });
+  M.root.updateMatrixWorld(true);
+}
+
+function goFrame(f) {
+  S.frame = clamp(Math.round(f), 0, D.frameCount);
+  if (!M) { refreshKeysUI(); return; }
+  poseAt(S.frame);
+  S.edited.clear();
+  S.shapeEdited.clear();
+  syncLimbs();
+  updateOnion();
+  refreshKeysUI();
+}
+
+function allKeyFrames() {
+  const set = new Set();
+  for (const t of D.tracks.values()) for (const k of t.keys) set.add(k.f);
+  for (const t of D.shapes.values()) for (const k of t.keys) set.add(k.f);
+  return [...set].sort((a, b) => a - b);
+}
+const hasKeys = () => [...D.tracks.values(), ...D.shapes.values()].some(t => t.keys.length);
+
+// ================================================================
+//  取り消し
+// ================================================================
+
+const undoStack = [], redoStack = [];
+function snapshot() {
+  return {
+    doc: {
+      name: D.name, fps: D.fps, frameCount: D.frameCount, loop: D.loop,
+      tracks: [...D.tracks].map(([i, t]) => [i, t.keys.map(k => ({ f: k.f, q: k.q.clone(), p: k.p ? k.p.clone() : null }))]),
+      shapes: [...D.shapes].map(([id, t]) => [id, t.keys.map(k => ({ ...k }))]),
+      interp: [...D.interp],
+    },
+    pose: M ? savePose() : null, edited: [...S.edited], shapeEdited: [...S.shapeEdited], frame: S.frame,
+  };
+}
+function restoreSnapshot(s) {
+  Object.assign(D, { name: s.doc.name, fps: s.doc.fps, frameCount: s.doc.frameCount, loop: s.doc.loop });
+  D.tracks = new Map(s.doc.tracks.map(([i, keys]) => [i, { keys: keys.map(k => ({ f: k.f, q: k.q.clone(), p: k.p ? k.p.clone() : null })) }]));
+  D.shapes = new Map(s.doc.shapes.map(([id, keys]) => [id, { keys: keys.map(k => ({ ...k })) }]));
+  D.interp = new Map(s.doc.interp);
+  docVer++;
+  S.frame = s.frame;
+  if (M && s.pose) restorePose(s.pose);
+  S.edited = new Set(s.edited);
+  S.shapeEdited = new Set(s.shapeEdited);
+  syncLimbs();
+  updateOnion();
+  refreshAll();
+}
+function pushUndo() {
+  undoStack.push(snapshot());
+  if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+}
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(snapshot());
+  restoreSnapshot(undoStack.pop());
+  markDirty();
+}
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(snapshot());
+  restoreSnapshot(redoStack.pop());
+  markDirty();
+}
+
+// ================================================================
+//  選択と操作
+// ================================================================
+
+function select(sel) {
+  S.sel = sel;
+  attachGizmo();
+  refreshBoneListSel();
+  const i = selectedBone();
+  if (i >= 0) tlReveal('b' + i);
+  drawTimeline();
+}
+
+function attachGizmo() {
+  gizmo.detach();
+  if (!M || !S.sel || S.playing) return;
+  if (S.sel.kind === 'bone') {
+    const i = S.sel.i;
+    const movable = i === M.hips;
+    gizmo.setMode(S.mode === 'translate' && movable ? 'translate' : 'rotate');
+    gizmo.attach(M.bones[i]);
+  } else if (S.sel.kind === 'ik') {
+    gizmo.setMode(S.mode);
+    gizmo.attach(M.limbs[S.sel.limb].target);
+  } else if (S.sel.kind === 'pole') {
+    gizmo.setMode('translate');
+    gizmo.attach(M.limbs[S.sel.limb].pole);
+  }
+  gizmo.setSpace(S.space);
+}
+
+function selectedBone() {
+  if (!S.sel || !M) return -1;
+  if (S.sel.kind === 'bone') return S.sel.i;
+  return M.limbs[S.sel.limb]?.c ?? -1;
+}
+
+gizmo.addEventListener('mouseDown', () => { pushUndo(); });
+gizmo.addEventListener('objectChange', () => {
+  if (!M || !S.sel) return;
+  if (S.sel.kind === 'bone') {
+    const i = S.sel.i;
+    S.edited.add(i);
+    constrainBone(i);
+    M.bones[i].updateMatrixWorld(true);
+    const own = limbOfBone(i);
+    for (const L of M.limbs) {
+      if (L === own) continue;
+      if (S.ik && S.pin && isAncestor(i, L.a)) solveLimb(L);
+      else syncLimb(L);
+    }
+    if (own) syncLimb(own);
+  } else {
+    solveLimb(M.limbs[S.sel.limb]);
+  }
+  updateUnkeyed();
+});
+gizmo.addEventListener('mouseUp', () => {
+  if (S.autoKey && S.edited.size) keyBones([...S.edited]);
+  else { refreshKeysUI(); if (S.edited.size) markDirty(); }
+});
+
+// ---------- 骨の丸・線・IK の印 ----------
+
+function circleTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const g = c.getContext('2d');
+  g.beginPath(); g.arc(16, 16, 12, 0, Math.PI * 2);
+  g.fillStyle = '#fff'; g.fill();
+  g.lineWidth = 4; g.strokeStyle = '#000'; g.stroke();
+  return new THREE.CanvasTexture(c);
+}
+const circleTex = circleTexture();
+const MK = { points: null, lines: null, handles: null, poleLines: null, list: [], hlist: [] };
+const onion = { prev: null, next: null };
+
+function overlayMaterial(opts) { return Object.assign(opts, { depthTest: false, depthWrite: false, transparent: true }); }
+
+function buildMarkers() {
+  for (const k of ['points', 'lines', 'handles', 'poleLines']) if (MK[k]) { scene.remove(MK[k]); MK[k].geometry.dispose(); }
+  const mkPoints = (n, size, map) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    const p = new THREE.Points(g, new THREE.PointsMaterial(overlayMaterial({ size, sizeAttenuation: false, vertexColors: true, map, alphaTest: map ? 0.5 : 0 })));
+    p.renderOrder = 1000;
+    p.frustumCulled = false;
+    scene.add(p);
+    return p;
+  };
+  const mkLines = (n, color, opacity) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 6), 3));
+    const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial(overlayMaterial({ color, opacity })));
+    l.renderOrder = 999;
+    l.frustumCulled = false;
+    scene.add(l);
+    return l;
+  };
+  const n = M.bones.length;
+  MK.points = mkPoints(n, 11, circleTex);
+  MK.lines = mkLines(n, 0xc8d0e0, 0.45);
+  MK.handles = mkPoints(8, 13, null);
+  MK.poleLines = mkLines(4, 0x9fd0ff, 0.5);
+  for (const k of ['prev', 'next']) {
+    if (onion[k]) { scene.remove(onion[k]); onion[k].geometry.dispose(); }
+    onion[k] = mkLines(n, k === 'prev' ? 0xff5a4f : 0x5fd06a, 0.8);
+    onion[k].visible = false;
+  }
+}
+
+function boneShown(i) {
+  if (S.boneView === 'none') return false;
+  if (S.ik && M.limbs.some(L => L.c === i)) return false;
+  return S.boneView === 'all' || M.humanSet.has(i);
+}
+
+const _v = new THREE.Vector3();
+function updateMarkers() {
+  if (!M || !MK.points) return;
+  const shown = [];
+  for (let i = 0; i < M.bones.length; i++) if (boneShown(i)) shown.push(i);
+  MK.list = shown;
+  const pos = MK.points.geometry.attributes.position, col = MK.points.geometry.attributes.color;
+  const selB = S.sel?.kind === 'bone' ? S.sel.i : -1;
+  shown.forEach((i, k) => {
+    M.bones[i].getWorldPosition(_v);
+    pos.setXYZ(k, _v.x, _v.y, _v.z);
+    const c = i === selB ? [1, 0.54, 0.24] : S.edited.has(i) ? [1, 0.85, 0.3] : M.humanSet.has(i) ? [0.92, 0.94, 1] : [0.55, 0.62, 0.75];
+    col.setXYZ(k, c[0], c[1], c[2]);
+  });
+  MK.points.geometry.setDrawRange(0, shown.length);
+  pos.needsUpdate = col.needsUpdate = true;
+
+  const lp = MK.lines.geometry.attributes.position;
+  const m = fillSkeleton(lp, S.boneView);
+  MK.lines.geometry.setDrawRange(0, m);
+  lp.needsUpdate = true;
+
+  // IK: 四角 = 手先・足先、丸 = ポール（肘・膝の向き）
+  const hp = MK.handles.geometry.attributes.position, hc = MK.handles.geometry.attributes.color;
+  const plp = MK.poleLines.geometry.attributes.position;
+  MK.hlist = [];
+  let pl = 0;
+  if (S.ik) {
+    M.limbs.forEach((L, li) => {
+      const selT = S.sel?.kind === 'ik' && S.sel.limb === li, selP = S.sel?.kind === 'pole' && S.sel.limb === li;
+      let k = MK.hlist.length;
+      hp.setXYZ(k, L.target.position.x, L.target.position.y, L.target.position.z);
+      hc.setXYZ(k, ...(selT ? [1, 0.54, 0.24] : [0.35, 0.8, 1]));
+      MK.hlist.push({ kind: 'ik', limb: li });
+      k++;
+      hp.setXYZ(k, L.pole.position.x, L.pole.position.y, L.pole.position.z);
+      hc.setXYZ(k, ...(selP ? [1, 0.54, 0.24] : [0.55, 0.55, 0.9]));
+      MK.hlist.push({ kind: 'pole', limb: li });
+      M.bones[L.b].getWorldPosition(_v);
+      plp.setXYZ(pl++, _v.x, _v.y, _v.z);
+      plp.setXYZ(pl++, L.pole.position.x, L.pole.position.y, L.pole.position.z);
+    });
+  }
+  MK.handles.geometry.setDrawRange(0, MK.hlist.length);
+  hp.needsUpdate = hc.needsUpdate = true;
+  MK.poleLines.geometry.setDrawRange(0, pl);
+  plp.needsUpdate = true;
+}
+
+/** 骨の線（親 → 子）。人型の表示では、人型の骨どうしを、間の骨を飛ばしてつなぐ。 */
+function fillSkeleton(attr, viewMode) {
+  let m = 0;
+  if (viewMode === 'none') return 0;
+  for (let i = 0; i < M.bones.length; i++) {
+    let p = M.parent[i];
+    if (viewMode === 'human') {
+      if (!M.humanSet.has(i)) continue;
+      while (p >= 0 && !M.humanSet.has(p)) p = M.parent[p];
+    }
+    if (p < 0) continue;
+    M.bones[p].getWorldPosition(_v); attr.setXYZ(m++, _v.x, _v.y, _v.z);
+    M.bones[i].getWorldPosition(_v); attr.setXYZ(m++, _v.x, _v.y, _v.z);
+  }
+  return m;
+}
+
+function updateOnion() {
+  if (!M || !onion.prev) return;
+  onion.prev.visible = onion.next.visible = false;
+  if (!S.onion) return;
+  const frames = allKeyFrames();
+  const prev = [...frames].reverse().find(f => f < S.frame), next = frames.find(f => f > S.frame);
+  const saved = savePose();
+  for (const [f, obj] of [[prev, onion.prev], [next, onion.next]]) {
+    if (f == null) continue;
+    poseAt(f);
+    const lp = obj.geometry.attributes.position;
+    const m = fillSkeleton(lp, S.boneView === 'none' ? 'human' : S.boneView);
+    obj.geometry.setDrawRange(0, m);
+    lp.needsUpdate = true;
+    obj.visible = true;
+  }
+  restorePose(saved);
+}
+
+// ---------- クリックで選ぶ ----------
+
+const raycaster = new THREE.Raycaster();
+let press = null;
+renderer.domElement.addEventListener('pointerdown', e => {
+  press = { x: e.clientX, y: e.clientY, gizmo: gizmo.axis !== null, button: e.button };
+});
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+renderer.domElement.addEventListener('pointerup', e => {
+  // 右クリック（動かさずに離した）: メッシュを隠すメニュー
+  if (press && press.button === 2 && Math.hypot(e.clientX - press.x, e.clientY - press.y) <= 4) { press = null; meshMenu(e); return; }
+  if (!press || press.button !== 0) { press = null; return; }
+  const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+  const usedGizmo = press.gizmo;
+  press = null;
+  if (moved > 4 || usedGizmo || !M || S.playing) return;
+  const r = renderer.domElement.getBoundingClientRect();
+  pick(e.clientX - r.left, e.clientY - r.top);
+});
+
+function screenOf(p, r) {
+  _v.copy(p).project(camera);
+  return { x: (_v.x + 1) / 2 * r.width, y: (1 - _v.y) / 2 * r.height, z: _v.z };
+}
+
+function pick(x, y) {
+  const r = renderer.domElement.getBoundingClientRect();
+  let best = null;
+  const tryHit = (p, sel, radius) => {
+    const s = screenOf(p, r);
+    if (s.z > 1) return;
+    const d = Math.hypot(s.x - x, s.y - y);
+    if (d <= radius && (!best || d < best.d)) best = { d, sel };
+  };
+  if (S.ik) M.limbs.forEach((L, li) => { tryHit(L.target.position, { kind: 'ik', limb: li }, 10); tryHit(L.pole.position, { kind: 'pole', limb: li }, 9); });
+  if (!best) for (const i of MK.list) tryHit(wp(M.bones[i]), { kind: 'bone', i }, 9);
+  if (best) { select(best.sel); return; }
+
+  // 体をクリック: その点をいちばん動かしている骨
+  raycaster.setFromCamera(new THREE.Vector2(x / r.width * 2 - 1, -(y / r.height) * 2 + 1), camera);
+  const meshes = M.meshes.filter(m => m.visible);
+  for (const m of meshes) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
+  const hits = raycaster.intersectObjects(meshes, false);
+  for (const h of hits) {
+    const i = boneAtHit(h);
+    if (i < 0) continue;
+    const L = S.ik ? M.limbs.findIndex(l => l.c === i) : -1;
+    select(L >= 0 ? { kind: 'ik', limb: L } : { kind: 'bone', i });
+    return;
+  }
+}
+
+function boneAtHit(h) {
+  const m = h.object;
+  if (!m.isSkinnedMesh || !h.face) return -1;
+  const si = m.geometry.attributes.skinIndex, sw = m.geometry.attributes.skinWeight;
+  if (!si || !sw) return -1;
+  const bc = h.barycoord || new THREE.Vector3(1 / 3, 1 / 3, 1 / 3);
+  const acc = new Map();
+  [[h.face.a, bc.x], [h.face.b, bc.y], [h.face.c, bc.z]].forEach(([vi, bw]) => {
+    for (let k = 0; k < 4; k++) {
+      const w = sw.array[vi * sw.itemSize + k] * bw;
+      if (!(w > 0)) continue;
+      let b = m.skeleton.bones[si.array[vi * si.itemSize + k]];
+      while (b && !M.index.has(b)) b = b.parent;
+      if (!b) continue;
+      let i = M.index.get(b);
+      if (S.boneView === 'human') while (i >= 0 && !M.humanSet.has(i)) i = M.parent[i];
+      if (i >= 0) acc.set(i, (acc.get(i) || 0) + w);
+    }
+  });
+  let best = -1, bw = 0;
+  for (const [i, w] of acc) if (w > bw) { bw = w; best = i; }
+  return best;
+}
+
+function focusSelected() {
+  if (!M) return;
+  const i = selectedBone();
+  const p = S.sel?.kind === 'ik' ? M.limbs[S.sel.limb].target.position.clone() : i >= 0 ? wp(M.bones[i]) : null;
+  if (!p) { frameCamera(); return; }
+  // その骨から先（人型の骨）が収まる距離
+  let extent = M.size * 0.08;
+  if (i >= 0) {
+    const stack = [i];
+    while (stack.length) {
+      const j = stack.pop();
+      if (M.humanSet.has(j) || j === i) extent = Math.max(extent, wp(M.bones[j]).distanceTo(p));
+      stack.push(...M.children[j]);
+    }
+  }
+  const off = camera.position.clone().sub(orbit.target);
+  const dist = Math.min(M.size * 2.6, extent * 3.2);
+  orbit.target.copy(p);
+  camera.position.copy(p).add(off.setLength(dist));
+  orbit.update();
+}
+
+// ================================================================
+//  ポーズ（コピー・ミラー）。回転は「元のポーズからのワールドの差分」で扱う
+// ================================================================
+
+const deltaOf = i => wq(M.bones[i]).multiply(M.restWQ[i].clone().invert());
+/** 親の差分を除いた、その骨だけの回し方（元のポーズの向きで表す）。左右対称な元のポーズなら X の反転でミラーできる。 */
+function ownDeltas() {
+  const G = M.bones.map((_, i) => deltaOf(i));
+  return G.map((g, i) => (M.parent[i] >= 0 ? G[M.parent[i]].clone().invert() : new THREE.Quaternion()).multiply(g));
+}
+/** own（骨ごと）から、親から順にポーズを組む。hipsDelta はワールドの位置の差分。 */
+function applyOwnDeltas(own, hipsDelta) {
+  const G = [];
+  for (let i = 0; i < M.bones.length; i++) {
+    const g = (M.parent[i] >= 0 ? G[M.parent[i]].clone() : new THREE.Quaternion()).multiply(own[i]);
+    G.push(g);
+    setWorldQuat(M.bones[i], g.clone().multiply(M.restWQ[i]));
+    if (i === M.hips && hipsDelta) setWorldPos(M.bones[i], M.restWP[i].clone().add(hipsDelta));
+  }
+}
+const hipsDelta = () => wp(M.bones[M.hips]).sub(M.restWP[M.hips]);
+
+function changedBones(before) {
+  const out = [];
+  M.bones.forEach((b, i) => {
+    if (Math.abs(b.quaternion.dot(before[i][0])) < 1 - 1e-9 || b.position.distanceToSquared(before[i][1]) > 1e-12) out.push(i);
+  });
+  return out;
+}
+
+function afterPoseOp(before) {
+  const ch = changedBones(before);
+  ch.forEach(i => S.edited.add(i));
+  syncLimbs();
+  if (S.autoKey && ch.length) keyBones(ch);
+  else { refreshKeysUI(); markDirty(); }
+}
+
+/** mode: 'all' 全身反転 / 'L2R' 左を右へ / 'R2L' 右を左へ / 'sel' 選んだ骨を反対側へ */
+function mirrorPose(mode) {
+  if (!M) return;
+  const sel = selectedBone();
+  if (mode === 'sel' && sel < 0) { setStatus('骨を選んでください'); return; }
+  pushUndo();
+  const before = savePose();
+  const own = ownDeltas();
+  const out = own.map(q => q.clone());
+  let hd = hipsDelta();
+  M.bones.forEach((_, i) => {
+    const side = sideOf(M.names[i]), j = partnerOf(i);
+    if (mode === 'all') out[i] = mirrorQ(own[j]);
+    else if (mode === 'L2R' && side === 'Right' && j !== i) out[i] = mirrorQ(own[j]);
+    else if (mode === 'R2L' && side === 'Left' && j !== i) out[i] = mirrorQ(own[j]);
+  });
+  if (mode === 'sel') {
+    const j = partnerOf(sel);
+    out[j] = mirrorQ(own[sel]);
+  }
+  if (mode === 'all') hd = mirrorV(hd);
+  applyOwnDeltas(out, hd);
+  afterPoseOp(before);
+  setStatus({ all: '全身を反転', L2R: '左を右へ', R2L: '右を左へ', sel: `${M.names[sel]} → ${M.names[partnerOf(sel)]}` }[mode]);
+}
+
+let clipboard = null;
+function copyPose() {
+  if (!M) return;
+  const one = S.sel?.kind === 'bone' ? S.sel.i : -1;
+  const idx = one >= 0 ? [one] : M.bones.map((_, i) => i);
+  clipboard = {
+    whole: one < 0,
+    items: idx.map(i => ({ name: M.names[i], q: M.bones[i].quaternion.clone(), p: M.bones[i].position.clone() })),
+    own: one < 0 ? ownDeltas() : null, hips: one < 0 ? hipsDelta() : null, model: M.name,
+  };
+  lastCopy = 'pose';
+  setStatus(one >= 0 ? `${M.names[one]} をコピー` : '全身をコピー');
+}
+function pastePose(mirror) {
+  if (!M || !clipboard) return;
+  pushUndo();
+  const before = savePose();
+  if (mirror && clipboard.whole && clipboard.model === M.name) {
+    applyOwnDeltas(M.bones.map((_, i) => mirrorQ(clipboard.own[partnerOf(i)])), mirrorV(clipboard.hips));
+  } else {
+    for (const it of clipboard.items) {
+      const i = M.byName.get(it.name);
+      if (i == null) continue;
+      M.bones[i].quaternion.copy(it.q);
+      if (i === M.hips) M.bones[i].position.copy(it.p);
+    }
+    M.root.updateMatrixWorld(true);
+  }
+  afterPoseOp(before);
+}
+
+// ================================================================
+//  キーの操作。キー列は「b骨の番号」「sシェイプの番号」で指す
+// ================================================================
+
+const allHumanOrAll = () => (M.humanSet.size >= 10 ? [...M.humanSet] : M.bones.map((_, i) => i)).sort((a, b) => a - b);
+
+function trackOfRef(ref) {
+  if (ref[0] === 'b') return D.tracks.get(Number(ref.slice(1)));
+  const s = M.shapes[Number(ref.slice(1))];
+  return s ? D.shapes.get(s.id) : null;
+}
+function dropIfEmpty(ref) {
+  const t = trackOfRef(ref);
+  if (t && !t.keys.length) {
+    if (ref[0] === 'b') D.tracks.delete(Number(ref.slice(1)));
+    else D.shapes.delete(M.shapes[Number(ref.slice(1))].id);
+  }
+}
+function allRefs() {
+  return [...[...D.tracks.keys()].map(i => 'b' + i), ...[...D.shapes.keys()].map(id => 's' + M.shapeIndex.get(id))];
+}
+const selectedShapeRef = () => (S.shapeSel != null && M.shapeIndex.has(S.shapeSel) ? 's' + M.shapeIndex.get(S.shapeSel) : null);
+
+function keySelected() {
+  if (!M) return;
+  const shapes = [...S.shapeEdited];
+  if (S.tab === 'shapes' && S.shapeSel && !shapes.includes(S.shapeSel)) shapes.push(S.shapeSel);
+  const i = selectedBone();
+  let bones = [...S.edited];
+  if (S.sel?.kind === 'ik' || S.sel?.kind === 'pole') { const L = M.limbs[S.sel.limb]; bones.push(L.a, L.b, L.c); }
+  else if (i >= 0 && S.tab === 'bones') bones.push(i);
+  bones = [...new Set(bones)];
+  if (!bones.length && !shapes.length) { setStatus('骨かシェイプを選んでください'); return; }
+  pushUndo();
+  keyBones(bones, shapes);
+}
+/** 今見えているポーズ（キーの間でも）をそのままキーにする。人型の骨全部と、キーのある骨・シェイプ、動かした骨・シェイプ。 */
+function keyAll() {
+  if (!M) return;
+  pushUndo();
+  const keyed = [...D.tracks].filter(([, t]) => t.keys.length).map(([i]) => i);
+  keyBones([...new Set([...allHumanOrAll(), ...keyed, ...S.edited])], [...new Set([...D.shapes.keys(), ...S.shapeEdited])]);
+}
+
+/** 選んだキー（タイムライン）→ [キー列, フレーム] の一覧。全体の行のキーは、そのフレームの全部のキー列。 */
+function expandSel(sel = TL.sel) {
+  const out = [];
+  for (const id of sel) {
+    const at = id.lastIndexOf(':');
+    const ref = id.slice(0, at), f = Number(id.slice(at + 1));
+    if (ref === 'all') { for (const r of allRefs()) if (trackOfRef(r)?.keys.some(k => k.f === f)) out.push([r, f]); }
+    else out.push([ref, f]);
+  }
+  return out;
+}
+
+function deleteKeys() {
+  if (!M) return;
+  let list = expandSel();
+  if (!list.length) {
+    const i = selectedBone();
+    if (i >= 0 && D.tracks.get(i)?.keys.some(k => k.f === S.frame)) list.push(['b' + i, S.frame]);
+    const sr = selectedShapeRef();
+    if (S.tab === 'shapes' && sr && trackOfRef(sr)?.keys.some(k => k.f === S.frame)) list.push([sr, S.frame]);
+  }
+  if (!list.length) return;
+  pushUndo();
+  for (const [ref, f] of list) {
+    const t = trackOfRef(ref);
+    if (!t) continue;
+    t.keys = t.keys.filter(k => k.f !== f);
+    dropIfEmpty(ref);
+  }
+  const left = new Set(allKeyFrames());
+  for (const f of [...D.interp.keys()]) if (!left.has(f)) D.interp.delete(f);
+  TL.sel.clear();
+  docVer++;
+  markDirty();
+  goFrame(S.frame);
+}
+
+function moveKeys(delta) {
+  const list = expandSel();
+  if (!list.length || !delta) return;
+  pushUndo();
+  const moving = new Map();
+  for (const [ref, f] of list) {
+    const t = trackOfRef(ref);
+    const k = t?.keys.find(x => x.f === f);
+    if (!k) continue;
+    t.keys = t.keys.filter(x => x !== k);
+    if (!moving.has(ref)) moving.set(ref, []);
+    moving.get(ref).push(k);
+  }
+  const frames = new Set(list.map(([, f]) => f));
+  const wholeFrames = [...TL.sel].filter(id => id.startsWith('all:')).map(id => Number(id.slice(4)));
+  const interpMoved = wholeFrames.map(f => [f, D.interp.get(f)]).filter(([, m]) => m != null);
+  for (const f of wholeFrames) D.interp.delete(f);
+  for (const [ref, ks] of moving) {
+    const t = trackOfRef(ref);
+    for (const k of ks) {
+      k.f = Math.max(0, k.f + delta);
+      t.keys = t.keys.filter(x => x.f !== k.f);
+      t.keys.push(k);
+    }
+    t.keys.sort((a, b) => a.f - b.f);
+  }
+  for (const [f, m] of interpMoved) D.interp.set(Math.max(0, f + delta), m);
+  TL.sel = new Set([...TL.sel].map(id => {
+    const at = id.lastIndexOf(':');
+    return `${id.slice(0, at)}:${Math.max(0, Number(id.slice(at + 1)) + delta)}`;
+  }));
+  docVer++;
+  markDirty();
+  if (frames.has(S.frame)) S.frame = Math.max(0, S.frame + delta);
+  goFrame(S.frame);
+}
+
+function setInterp(mode) {
+  let frames = [...new Set(expandSel().map(([, f]) => f))];
+  if (!frames.length) frames = [S.frame];
+  pushUndo();
+  for (const f of frames) { if (mode === 0) D.interp.delete(f); else D.interp.set(f, mode); }
+  docVer++;
+  markDirty();
+  goFrame(S.frame);
+}
+
+function jumpKey(dir) {
+  const frames = allKeyFrames();
+  const f = dir < 0 ? [...frames].reverse().find(x => x < S.frame) : frames.find(x => x > S.frame);
+  if (f != null) goFrame(f);
+}
+
+// ================================================================
+//  タイムライン（Blockbench に寄せた形）
+//  キーのある骨・シェイプごとに行を出す。目盛りでフレーム移動、何もない所のドラッグで範囲選択、選んだキーはまとめて動かす
+// ================================================================
+
+const TL = { el: $('tl'), left: 190, rulerH: 22, rowH: 20, start: 0, ppf: 8, fit: true, sel: new Set(), drag: null, rows: [], scrollY: 0, maxScroll: 0, hoverPlus: -1, hoverEnd: false };
+const MODE_NAMES = ['Auto', 'Linear', 'Constant'];
+const PLUS_W = 26, END_W = 9;
+
+/** 全体・キーのある骨（階層の順）・キーのあるシェイプ。選んでいる骨とシェイプは、キーが無くても出す。 */
+function tlRows() {
+  const rows = [{ label: '全体', ref: 'all' }];
+  if (!M) return rows;
+  const sel = selectedBone();
+  const bones = new Set([...D.tracks].filter(([, t]) => t.keys.length).map(([i]) => i));
+  if (sel >= 0) bones.add(sel);
+  for (const i of [...bones].sort((a, b) => a - b)) rows.push({ label: M.names[i], ref: 'b' + i, bone: i, selected: i === sel });
+  const shapes = new Set([...D.shapes].filter(([, t]) => t.keys.length).map(([id]) => id));
+  if (S.shapeSel != null) shapes.add(S.shapeSel);
+  for (const id of [...shapes].filter(v => M.shapeIndex.has(v)).sort((a, b) => M.shapeIndex.get(a) - M.shapeIndex.get(b)))
+    rows.push({ label: M.shapes[M.shapeIndex.get(id)].name, ref: 's' + M.shapeIndex.get(id), shape: id, selected: id === S.shapeSel });
+  return rows;
+}
+const fx = f => TL.left + (f - TL.start) * TL.ppf;
+const xf = x => (x - TL.left) / TL.ppf + TL.start;
+// 全体の行は目盛りのすぐ下に止めておき、その下の行だけ縦に流す
+const tlHeadH = () => TL.rulerH + TL.rowH;
+const rowY = r => (r === 0 ? TL.rulerH : tlHeadH() + (r - 1) * TL.rowH - TL.scrollY);
+const rowAt = y => (y < TL.rulerH ? -1 : y < tlHeadH() ? 0 : 1 + Math.floor((y - tlHeadH() + TL.scrollY) / TL.rowH));
+const rowShown = (r, h) => r === 0 || (rowY(r) + TL.rowH > tlHeadH() && rowY(r) < h);
+
+function tlFit() {
+  const w = TL.el.clientWidth - TL.left - 24;
+  TL.ppf = Math.max(0.5, w / Math.max(1, D.frameCount));
+  TL.start = -0.5 * 8 / TL.ppf;
+}
+
+function rowKeys(row) {
+  if (row.ref === 'all') return allKeyFrames();
+  return (trackOfRef(row.ref)?.keys || []).map(k => k.f);
+}
+
+/** その行が見える所まで縦に流す。 */
+function tlReveal(ref) {
+  const idx = tlRows().findIndex(r => r.ref === ref);
+  if (idx < 1) return;
+  const area = TL.el.clientHeight - tlHeadH();
+  const y = (idx - 1) * TL.rowH;
+  if (y < TL.scrollY) TL.scrollY = y;
+  else if (y + TL.rowH > TL.scrollY + area) TL.scrollY = y + TL.rowH - area;
+}
+
+function drawTimeline() {
+  const c = TL.el, dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  if (TL.fit) tlFit();
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = '#202226'; g.fillRect(0, 0, w, h);
+  TL.rows = tlRows();
+  const headH = tlHeadH();
+  TL.maxScroll = Math.max(0, (TL.rows.length - 1) * TL.rowH - (h - headH));
+  TL.scrollY = clamp(TL.scrollY, 0, TL.maxScroll);
+  g.textBaseline = 'middle';
+
+  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+  const step = steps.find(s => s * TL.ppf >= 42) || 1000;
+  const f0 = Math.max(0, Math.floor(xf(TL.left))), f1 = Math.ceil(xf(w));
+  const drag = TL.drag?.type === 'key' ? TL.drag.delta : 0;
+  const endX = fx(D.frameCount), startX = fx(0);
+
+  const drawRow = (row, r) => {
+    const y = rowY(r);
+    // キーの側
+    g.fillStyle = row.selected ? '#2a3442' : r === 0 ? '#2a2c31' : r % 2 ? '#23252a' : '#26282d';
+    g.fillRect(TL.left, y, w - TL.left, TL.rowH);
+    g.fillStyle = 'rgba(0,0,0,.3)';
+    if (endX < w) g.fillRect(Math.max(TL.left, endX), y, w - Math.max(TL.left, endX), TL.rowH);
+    if (startX > TL.left) g.fillRect(TL.left, y, startX - TL.left, TL.rowH);
+    g.strokeStyle = '#34373e';
+    for (let f = f0 - (f0 % step); f <= f1; f += step) {
+      const x = Math.round(fx(f)) + 0.5;
+      if (x > TL.left) { g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + TL.rowH); g.stroke(); }
+    }
+    g.save(); g.beginPath(); g.rect(TL.left, y, w - TL.left, TL.rowH); g.clip();
+    for (const f of rowKeys(row)) {
+      const sel = TL.sel.has(`${row.ref}:${f}`) || (r > 0 && TL.sel.has(`all:${f}`));
+      const x = fx(f + (sel ? drag : 0));
+      if (x < TL.left - 7 || x > w + 7) continue;
+      drawKeyShape(g, x, y + TL.rowH / 2, D.interp.get(f) ?? 0, sel, r === 0);
+    }
+    g.restore();
+    // 名前の側
+    g.fillStyle = row.selected ? '#2b4666' : r === 0 ? '#2a2c31' : '#25272b';
+    g.fillRect(0, y, TL.left, TL.rowH);
+    g.font = '11px system-ui, "Yu Gothic UI", sans-serif';
+    g.fillStyle = r === 0 ? '#9aa0aa' : row.ref[0] === 's' ? '#b9e0c0' : '#e8eaee';
+    g.save(); g.beginPath(); g.rect(0, y, TL.left - PLUS_W, TL.rowH); g.clip();
+    g.fillText(row.label, 8, y + TL.rowH / 2 + 0.5); g.restore();
+    // ＋: この行の今のフレームにキーを打つ
+    const px = TL.left - PLUS_W / 2, py = y + TL.rowH / 2;
+    g.strokeStyle = TL.hoverPlus === r ? '#fff' : '#8a8f99'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(px - 4.5, py); g.lineTo(px + 4.5, py); g.moveTo(px, py - 4.5); g.lineTo(px, py + 4.5); g.stroke(); g.lineWidth = 1;
+  };
+
+  // 縦に流れる行（全体の行より下にだけ描く）
+  g.save();
+  g.beginPath(); g.rect(0, headH, w, h - headH); g.clip();
+  TL.rows.forEach((row, r) => { if (r > 0 && rowShown(r, h)) drawRow(row, r); });
+  g.restore();
+  drawRow(TL.rows[0], 0);
+  g.fillStyle = '#1b1c1f'; g.fillRect(0, headH - 1, w, 1);
+
+  // 範囲選択の枠
+  if (TL.drag?.type === 'box') {
+    const b = TL.drag;
+    const bx = Math.max(TL.left, Math.min(b.x0, b.x1)), by = Math.max(TL.rulerH, Math.min(b.y0, b.y1));
+    const bw = Math.max(b.x0, b.x1) - bx, bh = Math.max(b.y0, b.y1) - by;
+    g.fillStyle = 'rgba(255,255,255,.07)'; g.fillRect(bx, by, bw, bh);
+    g.strokeStyle = 'rgba(255,255,255,.75)'; g.strokeRect(Math.round(bx) + 0.5, Math.round(by) + 0.5, Math.round(bw), Math.round(bh));
+  }
+
+  // 目盛り
+  g.fillStyle = '#2f3136'; g.fillRect(0, 0, w, TL.rulerH);
+  g.font = '10px system-ui, sans-serif';
+  for (let f = f0; f <= f1; f++) {
+    const x = Math.round(fx(f)) + 0.5;
+    if (x < TL.left) continue;
+    if (f % step === 0) {
+      g.strokeStyle = '#5a5f69'; g.beginPath(); g.moveTo(x, 12); g.lineTo(x, TL.rulerH); g.stroke();
+      g.fillStyle = '#b0b5bf'; g.fillText(String(f), x + 3, 8);
+    } else if (TL.ppf >= 5) {
+      g.strokeStyle = '#454952'; g.beginPath(); g.moveTo(x, 17); g.lineTo(x, TL.rulerH); g.stroke();
+    }
+  }
+  // 終わりの印（つまんで長さを変える）
+  if (endX >= TL.left && endX < w) {
+    g.fillStyle = TL.drag?.type === 'end' || TL.hoverEnd ? '#fff' : '#8a8f99';
+    g.fillRect(Math.round(endX), 3, 2, TL.rulerH - 6);
+    g.fillRect(Math.round(endX), TL.rulerH - 11, END_W, 8);
+  }
+  g.fillStyle = '#2f3136'; g.fillRect(0, 0, TL.left, TL.rulerH);
+  g.fillStyle = '#1b1c1f'; g.fillRect(TL.left - 1, 0, 1, h); g.fillRect(0, TL.rulerH - 1, w, 1);
+
+  // 今のフレーム
+  const cx = Math.round(fx(S.frame)) + 0.5;
+  if (cx >= TL.left) {
+    g.strokeStyle = '#ff8a3d'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(cx, TL.rulerH - 4); g.lineTo(cx, h); g.stroke(); g.lineWidth = 1;
+    g.fillStyle = '#ff8a3d';
+    g.beginPath(); g.moveTo(cx - 6, 9); g.lineTo(cx + 6, 9); g.lineTo(cx + 6, 14); g.lineTo(cx, TL.rulerH - 1); g.lineTo(cx - 6, 14); g.closePath(); g.fill();
+  }
+  // 縦の位置
+  if (TL.maxScroll > 0) {
+    const area = h - headH, bar = Math.max(18, area * area / ((TL.rows.length - 1) * TL.rowH));
+    g.fillStyle = 'rgba(255,255,255,.25)';
+    g.fillRect(w - 5, headH + (area - bar) * TL.scrollY / TL.maxScroll, 3, bar);
+  }
+}
+
+/** 丸 = Auto、ひし形 = Linear、四角 = Constant。 */
+function drawKeyShape(g, x, y, mode, sel, summary) {
+  g.fillStyle = sel ? '#ff8a3d' : summary ? '#a88a3f' : '#e2b340';
+  g.strokeStyle = sel ? '#fff' : '#111';
+  g.beginPath();
+  if (mode === 1) { g.moveTo(x, y - 6); g.lineTo(x + 6, y); g.lineTo(x, y + 6); g.lineTo(x - 6, y); g.closePath(); }
+  else if (mode === 2) g.rect(x - 4.5, y - 4.5, 9, 9);
+  else g.arc(x, y, 5, 0, Math.PI * 2);
+  g.fill(); g.stroke();
+}
+
+function tlHit(x, y) {
+  const r = rowAt(y);
+  if (r < 0 || r >= TL.rows.length || x < TL.left - 6) return null;
+  const row = TL.rows[r];
+  let best = null;
+  for (const f of rowKeys(row)) {
+    const d = Math.abs(fx(f) - x);
+    if (d <= 7 && (!best || d < best.d)) best = { d, id: `${row.ref}:${f}`, f, row };
+  }
+  return best;
+}
+const tlKeySelected = hit => TL.sel.has(hit.id) || (hit.row.ref !== 'all' && TL.sel.has(`all:${hit.f}`));
+const tlOnEnd = (x, y) => y < TL.rulerH && x >= TL.left && x >= fx(D.frameCount) && x <= fx(D.frameCount) + END_W + 2;
+
+/** その行の今のフレームにキーを打つ。 */
+function keyRow(row) {
+  if (!M) return;
+  if (row.ref === 'all') { keyAll(); return; }
+  pushUndo();
+  if (row.bone != null) keyBones([row.bone]);
+  else keyShapes([row.shape]);
+}
+function selectRow(row) {
+  if (row.bone != null) { if (S.tab === 'shapes') setTab('bones'); select({ kind: 'bone', i: row.bone }); }
+  else if (row.shape != null) { if (S.tab !== 'shapes') setTab('shapes'); selectShape(row.shape); }
+}
+
+const tlPos = e => { const r = TL.el.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+
+TL.el.addEventListener('pointerdown', e => {
+  if (!M) return;
+  const { x, y } = tlPos(e);
+  if (e.button === 1) { TL.drag = { type: 'pan', x0: x, y0: y, s0: TL.start, sy0: TL.scrollY }; TL.el.setPointerCapture(e.pointerId); return; }
+  if (e.button !== 0) return;
+  const r = rowAt(y);
+  // 名前の列: ＋ でキー、名前で骨・シェイプを選ぶ
+  if (x < TL.left) {
+    if (r >= 0 && r < TL.rows.length) { if (x >= TL.left - PLUS_W) keyRow(TL.rows[r]); else selectRow(TL.rows[r]); }
+    return;
+  }
+  TL.el.setPointerCapture(e.pointerId);
+  // 目盛り: 終わりの印は長さ、それ以外はフレーム移動
+  if (y < TL.rulerH) {
+    if (tlOnEnd(x, y)) { pushUndo(); TL.drag = { type: 'end', from: D.frameCount }; }
+    else { TL.drag = { type: 'scrub' }; if (S.playing) stopPlay(); goFrame(xf(x)); }
+    drawTimeline();
+    return;
+  }
+  const add = e.shiftKey || e.ctrlKey || e.metaKey;
+  const hit = tlHit(x, y);
+  if (hit) {
+    let single = false;
+    if (add) { if (TL.sel.has(hit.id)) TL.sel.delete(hit.id); else TL.sel.add(hit.id); }
+    else if (!tlKeySelected(hit)) { TL.sel.clear(); TL.sel.add(hit.id); }
+    else single = true; // 動かさずに離したら、このキーだけにする
+    TL.drag = { type: 'key', x0: x, delta: 0, hit, single, add };
+  } else {
+    // 何もない所: ドラッグで範囲選択。クリックだけなら選択を外す
+    TL.drag = { type: 'box', x0: x, y0: y, x1: x, y1: y, base: new Set(add ? TL.sel : []) };
+    if (!add) TL.sel.clear();
+  }
+  drawTimeline();
+});
+TL.el.addEventListener('pointermove', e => {
+  const { x, y } = tlPos(e);
+  const d = TL.drag;
+  if (!d) {
+    const r = rowAt(y);
+    const plus = x < TL.left && x >= TL.left - PLUS_W && r >= 0 && r < TL.rows.length ? r : -1;
+    const end = tlOnEnd(x, y);
+    if (plus !== TL.hoverPlus || end !== TL.hoverEnd) { TL.hoverPlus = plus; TL.hoverEnd = end; drawTimeline(); }
+    TL.el.style.cursor = end ? 'ew-resize' : x < TL.left && r >= 0 && r < TL.rows.length ? 'pointer' : 'default';
+    return;
+  }
+  if (d.type === 'scrub') { const f = clamp(Math.round(xf(x)), 0, D.frameCount); if (f !== S.frame) goFrame(f); }
+  else if (d.type === 'end') {
+    const n = Math.max(1, Math.round(xf(x - END_W / 2)));
+    if (n !== D.frameCount) { D.frameCount = n; docVer++; TL.fit = false; $('frames').value = n; goFrame(Math.min(S.frame, n)); }
+  }
+  else if (d.type === 'key') { d.delta = Math.round((x - d.x0) / TL.ppf); drawTimeline(); }
+  else if (d.type === 'pan') { TL.fit = false; TL.start = d.s0 - (x - d.x0) / TL.ppf; TL.scrollY = d.sy0 - (y - d.y0); drawTimeline(); }
+  else if (d.type === 'box') {
+    d.x1 = x; d.y1 = y;
+    TL.sel = new Set(d.base);
+    const xa = Math.min(d.x0, d.x1), xb = Math.max(d.x0, d.x1), ya = Math.min(d.y0, d.y1), yb = Math.max(d.y0, d.y1);
+    if (xb - xa > 2 || yb - ya > 2) {
+      const h = TL.el.clientHeight;
+      TL.rows.forEach((row, r) => {
+        const cy = rowY(r) + TL.rowH / 2;
+        if (cy < ya || cy > yb || !rowShown(r, h) || (r > 0 && cy < tlHeadH())) return;
+        for (const f of rowKeys(row)) { const kx = fx(f); if (kx >= xa - 3 && kx <= xb + 3) TL.sel.add(`${row.ref}:${f}`); }
+      });
+    }
+    drawTimeline();
+  }
+});
+function tlEndDrag(cancel) {
+  const d = TL.drag;
+  TL.drag = null;
+  if (!d) return;
+  if (d.type === 'key' && !cancel) {
+    if (d.delta) moveKeys(d.delta);
+    else {
+      if (d.single) { TL.sel.clear(); TL.sel.add(d.hit.id); }
+      if (!d.add) goFrame(d.hit.f);
+    }
+  } else if (d.type === 'end') {
+    if (D.frameCount === d.from) undoStack.pop();
+    else { markDirty(); refreshAll(); }
+  }
+  drawTimeline();
+}
+TL.el.addEventListener('pointerup', () => tlEndDrag(false));
+TL.el.addEventListener('pointercancel', () => tlEndDrag(true));
+TL.el.addEventListener('pointerleave', () => { if (TL.hoverPlus !== -1 || TL.hoverEnd) { TL.hoverPlus = -1; TL.hoverEnd = false; drawTimeline(); } });
+TL.el.addEventListener('wheel', e => {
+  e.preventDefault();
+  const { x, y } = tlPos(e);
+  if (e.shiftKey) { TL.fit = false; TL.start += (e.deltaY || e.deltaX) / TL.ppf * 0.5; }
+  else if (e.ctrlKey || e.metaKey || e.altKey || y < TL.rulerH) {
+    // カーソルの位置を中心に拡大
+    const ax = Math.max(x, TL.left), f = xf(ax);
+    TL.fit = false;
+    TL.ppf = clamp(TL.ppf * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 0.3, 80);
+    TL.start = f - (ax - TL.left) / TL.ppf;
+  } else TL.scrollY += Math.sign(e.deltaY) * TL.rowH * 2;
+  drawTimeline();
+}, { passive: false });
+TL.el.addEventListener('dblclick', e => {
+  if (!M) return;
+  const { x, y } = tlPos(e);
+  if (x < TL.left) return;
+  if (y < TL.rulerH) { TL.fit = true; drawTimeline(); return; }
+  // 行の何もない所: そのフレームにキーを打つ
+  const r = rowAt(y);
+  if (r < 0 || r >= TL.rows.length || tlHit(x, y)) return;
+  goFrame(xf(x));
+  keyRow(TL.rows[r]);
+});
+TL.el.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  if (!M) return;
+  const { x, y } = tlPos(e);
+  if (x < TL.left || y < TL.rulerH) return;
+  const hit = tlHit(x, y);
+  if (hit && !tlKeySelected(hit)) { TL.sel.clear(); TL.sel.add(hit.id); drawTimeline(); }
+  const items = [];
+  const paste = keyClip ? [['貼り付け' + keyHint('paste'), pasteKeys]] : [];
+  if (hit) items.push(['コピー' + keyHint('copy'), copyKeys], ...paste, null, ...MODE_NAMES.map((n, m) => [n, () => setInterp(m)]), null, ['削除' + keyHint('deleteKey'), deleteKeys]);
+  else items.push(...paste);
+  if (items.length) showMenu(e.clientX, e.clientY, items);
+});
+
+// ---------- キーのコピー・貼り付け ----------
+
+let keyClip = null;
+/** 最後にコピーしたのがキーかポーズか。貼り付けはそちらを貼る。 */
+let lastCopy = 'pose';
+
+function copyKeys() {
+  if (!M) return;
+  const seen = new Set(), items = [];
+  let minF = Infinity;
+  for (const [ref, f] of expandSel()) {
+    if (seen.has(`${ref}:${f}`)) continue;
+    seen.add(`${ref}:${f}`);
+    const k = trackOfRef(ref)?.keys.find(v => v.f === f);
+    if (!k) continue;
+    minF = Math.min(minF, f);
+    items.push(ref[0] === 'b'
+      ? { bone: M.names[Number(ref.slice(1))], f, q: k.q.clone(), p: k.p ? k.p.clone() : null }
+      : { shape: M.shapes[Number(ref.slice(1))].id, f, v: k.v });
+  }
+  if (!items.length) return;
+  keyClip = { items, minF, interp: [...new Set(items.map(it => it.f))].map(f => [f - minF, D.interp.get(f) ?? 0]) };
+  lastCopy = 'keys';
+  setStatus(`キー ${items.length} 個をコピー`);
+}
+
+/** コピーしたキーを、いちばん早いキーが今のフレームに来るように貼る。 */
+function pasteKeys() {
+  if (!M || !keyClip) return;
+  pushUndo();
+  TL.sel.clear();
+  for (const it of keyClip.items) {
+    const f = S.frame + it.f - keyClip.minF;
+    if (it.bone != null) {
+      const i = M.byName.get(it.bone);
+      if (i == null) continue;
+      insertKey(track(i).keys, { f, q: it.q.clone(), p: i === M.hips ? (it.p ? it.p.clone() : M.bones[i].position.clone()) : null });
+      TL.sel.add(`b${i}:${f}`);
+    } else if (M.shapeIndex.has(it.shape)) {
+      insertKey(shapeTrack(it.shape).keys, { f, v: it.v });
+      TL.sel.add(`s${M.shapeIndex.get(it.shape)}:${f}`);
+    }
+  }
+  for (const [df, m] of keyClip.interp) if (m) D.interp.set(S.frame + df, m);
+  docVer++;
+  markDirty();
+  goFrame(S.frame);
+}
+
+// ---------- 高さ（上の縁をドラッグ。ブラウザが覚える） ----------
+
+(() => {
+  const wrap = $('tlwrap'), handle = $('tlresize');
+  try { const h = Number(localStorage.getItem('motiontool.tlHeight')); if (h >= 64) wrap.style.height = h + 'px'; } catch (e) { /* 覚えていなければ初期の高さ */ }
+  let from = null;
+  handle.addEventListener('pointerdown', e => { from = { y: e.clientY, h: wrap.clientHeight }; handle.setPointerCapture(e.pointerId); });
+  handle.addEventListener('pointermove', e => {
+    if (!from) return;
+    wrap.style.height = clamp(from.h + (from.y - e.clientY), 64, Math.round(window.innerHeight * 0.7)) + 'px';
+    resize();
+  });
+  handle.addEventListener('pointerup', () => {
+    if (!from) return;
+    from = null;
+    try { localStorage.setItem('motiontool.tlHeight', String(wrap.clientHeight)); } catch (e) { /* 覚えられなくても動く */ }
+  });
+})();
+
+// ================================================================
+//  骨の一覧
+// ================================================================
+
+const collapsed = new Set();
+function buildBoneList() {
+  const list = $('bones');
+  list.innerHTML = '';
+  collapsed.clear();
+  // 人型でない骨の枝（髪・スカートなど）は閉じておく
+  M.bones.forEach((_, i) => { if (!M.humanSet.has(i) && M.children[i].length) collapsed.add(i); });
+  M.rows = M.bones.map((b, i) => {
+    const row = document.createElement('div');
+    row.className = 'bone' + (M.humanSet.has(i) ? ' human' : '');
+    row.style.paddingLeft = (2 + M.depth[i] * 10) + 'px';
+    const tw = document.createElement('span');
+    tw.className = 'tw';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = M.names[i];
+    const kd = document.createElement('span');
+    kd.className = 'kd';
+    kd.textContent = '◆';
+    row.append(tw, nm, kd);
+    tw.addEventListener('click', e => {
+      e.stopPropagation();
+      if (collapsed.has(i)) collapsed.delete(i); else collapsed.add(i);
+      refreshBoneListVisibility();
+    });
+    row.addEventListener('click', () => select({ kind: 'bone', i }));
+    row.addEventListener('dblclick', () => focusSelected());
+    list.appendChild(row);
+    return { row, tw };
+  });
+  refreshBoneListVisibility();
+  refreshBoneListKeys();
+}
+
+
+/** 「骨: 人型」のときは人型の骨だけを並べる（間の骨を飛ばした木）。それ以外は全部の骨の木。 */
+function refreshBoneListVisibility() {
+  if (!M?.rows) return;
+  const q = S.tab === 'bones' ? $('filter').value.trim().toLowerCase() : '';
+  const humanOnly = S.boneView === 'human' && M.humanSet.size >= 10;
+  M.rows.forEach(({ row, tw }, i) => {
+    let show;
+    if (q) show = M.names[i].toLowerCase().includes(q);
+    else if (humanOnly) show = M.humanSet.has(i);
+    else { show = true; for (let p = M.parent[i]; p >= 0; p = M.parent[p]) if (collapsed.has(p)) { show = false; break; } }
+    row.style.display = show ? '' : 'none';
+    let depth = M.depth[i];
+    if (humanOnly) { depth = 0; for (let p = M.parent[i]; p >= 0; p = M.parent[p]) if (M.humanSet.has(p)) depth++; }
+    row.style.paddingLeft = (2 + depth * 10) + 'px';
+    tw.textContent = !humanOnly && M.children[i].length ? (collapsed.has(i) ? '▸' : '▾') : '';
+  });
+}
+
+function refreshBoneListSel() {
+  if (!M?.rows) return;
+  const s = selectedBone();
+  M.rows.forEach(({ row }, i) => row.classList.toggle('sel', i === s));
+  if (s >= 0) {
+    // 閉じた枝の中なら開く
+    let changed = false;
+    for (let p = M.parent[s]; p >= 0; p = M.parent[p]) if (collapsed.delete(p)) changed = true;
+    if (changed) refreshBoneListVisibility();
+    M.rows[s].row.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function refreshBoneListKeys() {
+  if (!M?.rows) return;
+  M.rows.forEach(({ row }, i) => {
+    const t = D.tracks.get(i);
+    row.classList.toggle('keyed', !!t?.keys.length);
+    row.classList.toggle('keynow', !!t?.keys.some(k => k.f === S.frame));
+  });
+}
+$('filter').addEventListener('input', () => (S.tab === 'shapes' ? refreshShapeListVisibility() : S.tab === 'meshes' ? refreshMeshList() : refreshBoneListVisibility()));
+
+// ================================================================
+//  シェイプキーの一覧
+// ================================================================
+
+const openMeshes = new Set();
+function buildShapeList() {
+  const list = $('shapes');
+  list.innerHTML = '';
+  openMeshes.clear();
+  M.shapeRows = [];
+  M.meshRows = [];
+  const byMesh = new Map();
+  for (const s of M.shapes) {
+    if (!byMesh.has(s.path)) byMesh.set(s.path, []);
+    byMesh.get(s.path).push(s);
+  }
+  if (!byMesh.size) { list.innerHTML = '<div class="mesh">シェイプキーはありません</div>'; return; }
+  // いちばんシェイプの多いメッシュ（たいてい顔）だけ開いておく
+  let biggest = null;
+  for (const [p, arr] of byMesh) if (!biggest || arr.length > byMesh.get(biggest).length) biggest = p;
+  openMeshes.add(biggest);
+  for (const [path, arr] of byMesh) {
+    const head = document.createElement('div');
+    head.className = 'mesh';
+    const tw = document.createElement('span');
+    tw.className = 'tw';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = `${path}（${arr.length}）`;
+    head.append(tw, nm);
+    head.onclick = () => { if (openMeshes.has(path)) openMeshes.delete(path); else openMeshes.add(path); refreshShapeListVisibility(); };
+    list.appendChild(head);
+    M.meshRows.push({ path, head, tw });
+    for (const s of arr) {
+      const row = document.createElement('div');
+      row.className = 'shape';
+      const sn = document.createElement('span');
+      sn.className = 'nm';
+      sn.textContent = s.name;
+      sn.title = s.name;
+      const sl = document.createElement('input');
+      sl.type = 'range'; sl.min = 0; sl.max = 100; sl.step = 1; sl.value = 0;
+      const val = document.createElement('span');
+      val.className = 'val';
+      const kd = document.createElement('span');
+      kd.className = 'kd';
+      kd.textContent = '◆';
+      row.append(sn, sl, val, kd);
+      row.addEventListener('click', e => { if (e.target !== sl) selectShape(s.id); });
+      let pushed = false;
+      sl.addEventListener('input', () => {
+        if (!pushed) { pushUndo(); pushed = true; }
+        setShapeValue(s.id, Number(sl.value));
+        S.shapeEdited.add(s.id);
+        if (S.shapeSel !== s.id) selectShape(s.id);
+        refreshShapeValues();
+        updateUnkeyed();
+      });
+      sl.addEventListener('change', () => {
+        pushed = false;
+        if (S.autoKey) keyShapes([s.id]);
+        else markDirty();
+      });
+      list.appendChild(row);
+      M.shapeRows.push({ s, row, sl, val, last: null });
+    }
+  }
+  refreshShapeListVisibility();
+}
+
+function refreshShapeListVisibility() {
+  if (!M?.shapeRows) return;
+  const q = S.tab === 'shapes' ? $('filter').value.trim().toLowerCase() : '';
+  const anyShown = new Set();
+  for (const r of M.shapeRows) {
+    const show = q ? r.s.name.toLowerCase().includes(q) : openMeshes.has(r.s.path);
+    r.row.style.display = show ? '' : 'none';
+    r.shown = show;
+    if (show || (!q)) anyShown.add(r.s.path);
+  }
+  for (const m of M.meshRows) {
+    m.head.style.display = anyShown.has(m.path) ? '' : 'none';
+    m.tw.textContent = q ? '' : openMeshes.has(m.path) ? '▾' : '▸';
+  }
+  refreshShapeValues(true);
+}
+
+/** 見えている行だけ、値とキーの印を更新する。 */
+function refreshShapeValues(force = false) {
+  if (!M?.shapeRows || S.tab !== 'shapes') return;
+  for (const r of M.shapeRows) {
+    if (!r.shown) continue;
+    const v = Math.round(shapeValue(r.s.id));
+    const t = D.shapes.get(r.s.id);
+    const state = `${v}|${!!t?.keys.length}|${!!t?.keys.some(k => k.f === S.frame)}|${S.shapeEdited.has(r.s.id)}|${S.shapeSel === r.s.id}`;
+    if (!force && state === r.last) continue;
+    r.last = state;
+    if (document.activeElement !== r.sl) r.sl.value = v;
+    r.val.textContent = v;
+    r.row.classList.toggle('on', v !== 0);
+    r.row.classList.toggle('keyed', !!t?.keys.length);
+    r.row.classList.toggle('keynow', !!t?.keys.some(k => k.f === S.frame));
+    r.row.classList.toggle('edited', S.shapeEdited.has(r.s.id));
+    r.row.classList.toggle('sel', S.shapeSel === r.s.id);
+  }
+}
+
+function selectShape(id) {
+  S.shapeSel = id;
+  refreshShapeValues();
+  if (M?.shapeIndex.has(id)) tlReveal('s' + M.shapeIndex.get(id));
+  drawTimeline();
+}
+
+function setTab(tab) {
+  S.tab = tab;
+  $('tabBones').classList.toggle('on', tab === 'bones');
+  $('tabShapes').classList.toggle('on', tab === 'shapes');
+  $('tabMeshes').classList.toggle('on', tab === 'meshes');
+  $('bones').style.display = tab === 'bones' ? '' : 'none';
+  $('shapes').style.display = tab === 'shapes' ? '' : 'none';
+  $('meshes').style.display = tab === 'meshes' ? '' : 'none';
+  $('filter').value = '';
+  refreshBoneListVisibility();
+  refreshShapeListVisibility();
+  refreshMeshList();
+}
+$('tabBones').onclick = () => setTab('bones');
+$('tabShapes').onclick = () => setTab('shapes');
+$('tabMeshes').onclick = () => setTab('meshes');
+
+// ================================================================
+//  メッシュの表示・非表示（服などを隠す）。隠したメッシュはクリックでも拾わない。モデルごとにブラウザが覚える
+// ================================================================
+
+const meshLabel = m => m.userData.originalName || m.name || '(名前なし)';
+
+function buildMeshList() {
+  const list = $('meshes');
+  list.innerHTML = '';
+  const bar = document.createElement('div');
+  bar.className = 'meshbar';
+  const all = document.createElement('button');
+  all.textContent = '全部表示';
+  all.onclick = () => setMeshesVisible(() => true);
+  const none = document.createElement('button');
+  none.textContent = '全部隠す';
+  none.onclick = () => setMeshesVisible(() => false);
+  bar.append(all, none);
+  list.appendChild(bar);
+  M.meshRows2 = M.meshes.map((m, k) => {
+    const row = document.createElement('label');
+    row.className = 'meshrow';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.onchange = () => setMeshesVisible((mm, kk) => (kk === k ? cb.checked : mm.visible));
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = meshLabel(m);
+    nm.title = meshLabel(m);
+    row.append(cb, nm);
+    list.appendChild(row);
+    return { row, cb };
+  });
+  // 前に隠したメッシュ
+  try {
+    const hidden = new Set(JSON.parse(localStorage.getItem('motiontool.hidden:' + M.name) || '[]'));
+    M.meshes.forEach(m => { if (hidden.has(meshLabel(m))) m.visible = false; });
+  } catch (e) { /* 覚えていなければ全部表示 */ }
+  refreshMeshList();
+}
+
+function setMeshesVisible(fn) {
+  if (!M) return;
+  M.meshes.forEach((m, k) => { m.visible = !!fn(m, k); });
+  try { localStorage.setItem('motiontool.hidden:' + M.name, JSON.stringify(M.meshes.filter(m => !m.visible).map(meshLabel))); } catch (e) { /* 覚えられなくても動く */ }
+  refreshMeshList();
+}
+
+function refreshMeshList() {
+  if (!M?.meshRows2) return;
+  const q = S.tab === 'meshes' ? $('filter').value.trim().toLowerCase() : '';
+  M.meshRows2.forEach(({ row, cb }, k) => {
+    const m = M.meshes[k];
+    cb.checked = m.visible;
+    row.classList.toggle('off', !m.visible);
+    row.style.display = !q || meshLabel(m).toLowerCase().includes(q) ? '' : 'none';
+  });
+  const hidden = M.meshes.filter(m => !m.visible).length;
+  $('tabMeshes').textContent = hidden ? `表示 (${hidden} 隠)` : '表示';
+}
+
+/** 3D 表示で右クリックした所のメッシュを隠すメニュー。 */
+function meshMenu(e) {
+  if (!M) return;
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const meshes = M.meshes.filter(m => m.visible);
+  for (const m of meshes) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
+  const hit = raycaster.intersectObjects(meshes, false)[0];
+  const items = [];
+  if (hit) {
+    const k = M.meshes.indexOf(hit.object);
+    items.push([`隠す: ${meshLabel(hit.object)}`, () => setMeshesVisible((m, kk) => (kk === k ? false : m.visible))]);
+    items.push(['これ以外を隠す', () => setMeshesVisible((m, kk) => kk === k)]);
+  }
+  if (M.meshes.some(m => !m.visible)) items.push(['全部表示', () => setMeshesVisible(() => true)]);
+  if (items.length) showMenu(e.clientX, e.clientY, items);
+}
+
+// ================================================================
+//  表示の更新
+// ================================================================
+
+function updateUnkeyed() {
+  const n = S.edited.size + S.shapeEdited.size;
+  $('unkeyed').textContent = n ? `キー無しの変更 ${n}` : '';
+}
+
+function refreshKeysUI() {
+  $('frame').value = S.frame;
+  const f = allKeyFrames().includes(S.frame) ? S.frame : null;
+  $('interp').value = String(f != null ? (D.interp.get(f) ?? 0) : 0);
+  refreshBoneListKeys();
+  refreshShapeValues();
+  updateUnkeyed();
+  drawTimeline();
+}
+
+function refreshAll() {
+  $('frames').value = D.frameCount;
+  $('fps').value = D.fps;
+  $('loop').checked = D.loop;
+  updateButtons();
+  updateTitle();
+  refreshBoneListSel();
+  refreshKeysUI();
+}
+
+function updateButtons() {
+  $('bMove').classList.toggle('on', S.mode === 'translate');
+  $('bRot').classList.toggle('on', S.mode === 'rotate');
+  $('bSpace').textContent = S.space === 'local' ? 'ローカル' : 'ワールド';
+  $('bIK').classList.toggle('on', S.ik);
+  $('bPin').classList.toggle('on', S.pin);
+  $('bPin').disabled = !S.ik;
+  $('bAuto').classList.toggle('on', S.autoKey);
+  $('bOnion').classList.toggle('on', S.onion);
+  $('bBones').textContent = '骨: ' + { human: '人型', all: 'すべて', none: 'なし' }[S.boneView];
+  $('bPlay').textContent = S.playing ? '■' : '▶';
+}
+
+// ================================================================
+//  再生
+// ================================================================
+
+function startPlay() {
+  if (!M) return;
+  S.playing = true;
+  S.playT = S.frame;
+  gizmo.detach();
+  updateButtons();
+}
+function stopPlay() {
+  S.playing = false;
+  updateButtons();
+  goFrame(Math.floor(S.playT));
+  attachGizmo();
+}
+
+// ================================================================
+//  保存・読み込み（.motion.json）
+// ================================================================
+
+/**
+ * キーの間も毎フレームのポーズを書く（Unity はマッスルで補間するので、キーだけだと間の形が HTML と変わる）。
+ * Unity 側で、直線で足りるキーは間引く。Constant の区間は間を書かない。
+ */
+function buildFile() {
+  const saved = savePose();
+  const tracked = [...D.tracks.keys()].filter(i => D.tracks.get(i).keys.length).sort((a, b) => a - b);
+  const real = new Set(allKeyFrames());
+  const frames = new Set();
+  for (const i of tracked) {
+    const { ks } = prepTrack(D.tracks.get(i), M.restQ[i], M.lowerView?.get(i));
+    ks.forEach((k, j) => {
+      frames.add(k.f);
+      if (j + 1 < ks.length && k.mode !== 2) for (let f = k.f + 1; f < ks[j + 1].f; f++) frames.add(f);
+    });
+  }
+  const poses = [...frames].sort((a, b) => a - b).map(f => {
+    poseAt(f);
+    const rot = new Array(tracked.length * 4);
+    const put = k => { const d = deltaOf(tracked[k]); rot[k * 4] = r6(d.x); rot[k * 4 + 1] = r6(d.y); rot[k * 4 + 2] = r6(d.z); rot[k * 4 + 3] = r6(d.w); };
+    tracked.forEach((i, k) => { if (M.humanSet.has(i)) put(k); });
+    // 人型でない骨（髪・しっぽなど）は、見えていた向き（Unity の再生の姿での向き）で書く
+    const view = applyUnityView();
+    tracked.forEach((i, k) => { if (!M.humanSet.has(i)) put(k); });
+    restoreUnityView(view);
+    const hp = hipsDelta();
+    const interp = real.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? 2 : 1);
+    return { frame: f, interp, key: real.has(f) ? 1 : 0, rot, hipsPos: [r6(hp.x), r6(hp.y), r6(hp.z)] };
+  });
+  restorePose(saved);
+
+  // シェイプ（0〜100）。骨と同じく、キーの間も毎フレーム書く
+  const shapeCurves = [], shapeKeys = [];
+  for (const [id, t] of D.shapes) {
+    if (!t.keys.length) continue;
+    const sh = M.shapeById.get(id);
+    const { ks } = prepShape(t);
+    const fr = new Set();
+    ks.forEach((k, j) => {
+      fr.add(k.f);
+      if (j + 1 < ks.length && k.mode !== 2) for (let f = k.f + 1; f < ks[j + 1].f; f++) fr.add(f);
+    });
+    const list = [...fr].sort((a, b) => a - b);
+    const own = new Set(t.keys.map(k => k.f));
+    shapeCurves.push({
+      path: sh.path, name: sh.name, frames: list, values: list.map(f => r6(evalShape(t, f))),
+      interp: list.map(f => (own.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? 2 : 1))),
+      key: list.map(f => (own.has(f) ? 1 : 0)),
+    });
+    shapeKeys.push({ mesh: sh.path, name: sh.name, keys: t.keys.map(k => ({ f: k.f, v: r6(k.v) })) });
+  }
+
+  const seen = new Set(), restBones = [], rest = [];
+  M.names.forEach((n, i) => {
+    if (seen.has(n)) return;
+    seen.add(n);
+    restBones.push(n);
+    rest.push(r6(M.restWP[i].x), r6(M.restWP[i].y), r6(M.restWP[i].z));
+  });
+  return {
+    format: 'MotionToolWeb', version: 1, model: M.name, name: D.name,
+    fps: D.fps, frameCount: D.frameCount, loop: D.loop,
+    restFrom: 'three', restBones, rest, hips: M.names[M.hips],
+    bones: tracked.map(i => M.names[i]), poses, shapeCurves,
+    human: Object.entries(M.human).map(([k, i]) => `${k}:${M.names[i]}`),
+    ...(M.unityInfo ? Object.fromEntries(Object.entries(M.unityInfo).filter(([, v]) => v)) : {}),
+    // ここから下は HTML だけが使う（Unity は無視する）
+    tracks: tracked.map(i => ({ bone: M.names[i], keys: D.tracks.get(i).keys.map(k => ({ f: k.f, q: k.q.toArray().map(r6), ...(k.p ? { p: k.p.toArray().map(r6) } : {}) })) })),
+    shapes: shapeKeys,
+    interp: [...D.interp].filter(([f]) => real.has(f)),
+  };
+}
+
+const clipNameOf = fileName => fileName.replace(/\.json$/i, '').replace(/\.motion$/i, '');
+
+async function save(as) {
+  if (!M) { setStatus('先に FBX を開いてください', true); return; }
+  if (!hasKeys()) { setStatus('キーがありません', true); return; }
+  const text = JSON.stringify(buildFile());
+  try {
+    if (window.showSaveFilePicker) {
+      if (as || !S.fileHandle) {
+        S.fileHandle = await window.showSaveFilePicker({
+          suggestedName: `${D.name}.motion.json`,
+          types: [{ description: 'Motion', accept: { 'application/json': ['.json'] } }],
+        });
+      }
+      const w = await S.fileHandle.createWritable();
+      await w.write(text);
+      await w.close();
+      S.fileName = S.fileHandle.name;
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      a.download = `${D.name}.motion.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      S.fileName = a.download;
+    }
+    D.name = clipNameOf(S.fileName);
+    S.dirty = false;
+    updateTitle();
+    setStatus(`保存: ${S.fileName}`);
+  } catch (e) {
+    if (e.name !== 'AbortError') setStatus('保存できません: ' + e.message, true);
+  }
+}
+
+async function openJson() {
+  if (window.showOpenFilePicker) {
+    try {
+      const [h] = await window.showOpenFilePicker({ types: [{ description: 'Motion', accept: { 'application/json': ['.json'] } }] });
+      const f = await h.getFile();
+      await loadJsonFile(f, h);
+    } catch (e) {
+      if (e.name !== 'AbortError') setStatus('開けません: ' + e.message, true);
+    }
+  } else $('fileJson').click();
+}
+
+async function loadJsonFile(file, handle = null) {
+  let obj;
+  try { obj = JSON.parse(await file.text()); } catch (e) { setStatus('json を読めません', true); return; }
+  if (obj.format !== 'MotionToolWeb') { setStatus('Motion Tool の json ではありません', true); return; }
+  if (!M) {
+    S.pendingJson = { obj, name: file.name, handle };
+    setStatus(`${obj.model || 'FBX'} を開くと ${file.name} を読み込みます`);
+    return;
+  }
+  applyMotionJson(obj, file.name, handle);
+}
+
+function applyMotionJson(obj, fileName, handle) {
+  if (S.dirty && hasKeys() && !confirm('保存していない変更があります。開きますか？')) return;
+  pushUndo();
+  const notes = [];
+  if (obj.model && obj.model !== M.name) notes.push(`モデルが違う（${obj.model}）`);
+  applyHumanFromJson(obj);
+  if (obj.model === M.name && setUnityInfo(obj)) notes.push('関節の軸は Unity');
+  D.fps = obj.fps || 30;
+  D.frameCount = Math.max(1, obj.frameCount || 60);
+  D.loop = !!obj.loop;
+  D.name = clipNameOf(fileName);
+  D.tracks.clear();
+  D.shapes.clear();
+  D.interp.clear();
+
+  const usable = Array.isArray(obj.tracks) && obj.tracks.length && obj.tracks.every(t => M.byName.has(t.bone)) && obj.model === M.name;
+  if (usable) {
+    for (const t of obj.tracks) {
+      const i = M.byName.get(t.bone);
+      D.tracks.set(i, { keys: t.keys.map(k => ({ f: k.f, q: new THREE.Quaternion().fromArray(k.q), p: k.p && i === M.hips ? new THREE.Vector3().fromArray(k.p) : null })) });
+    }
+    for (const [f, m] of obj.interp || []) D.interp.set(f, m);
+  } else if (obj.poses?.length) {
+    const fit = fitRest(obj);
+    if (!fit.ok) { undoStack.pop(); setStatus(fit.message, true); return; }
+    notes.push(`骨の位置の差 最大 ${(fit.error / M.size * 100).toFixed(2)}%`);
+    posesToTracks(obj, fit.scale);
+  }
+  // シェイプ: HTML が書いたキーがあればそれ、無ければ Unity が書いたカーブのキー
+  let missingShapes = 0;
+  if (Array.isArray(obj.shapes) && obj.shapes.length && obj.model === M.name) {
+    for (const sh of obj.shapes) {
+      const id = `${sh.mesh}|${sh.name}`;
+      if (M.shapeById.has(id)) D.shapes.set(id, { keys: sh.keys.map(k => ({ f: k.f, v: k.v })) });
+      else missingShapes++;
+    }
+  } else for (const c of obj.shapeCurves || []) {
+    const id = `${c.path}|${c.name}`;
+    if (!M.shapeById.has(id)) { missingShapes++; continue; }
+    const keys = [];
+    c.frames.forEach((f, k) => {
+      if (c.key && c.key[k] === 0) return;
+      keys.push({ f, v: c.values[k] });
+      const m = c.interp?.[k];
+      // HTML が書いたものは Auto も Linear として書いている（キーの間を毎フレーム埋めているため）
+      if (m && !D.interp.has(f) && !(m === 1 && obj.restFrom !== 'unity')) D.interp.set(f, m);
+    });
+    D.shapes.set(id, { keys });
+  }
+  if (missingShapes) notes.push(`モデルに無いシェイプ ${missingShapes} 個`);
+  docVer++;
+  S.fileHandle = handle;
+  S.fileName = fileName;
+  S.dirty = false;
+  TL.sel.clear();
+  TL.fit = true;
+  goFrame(0);
+  refreshAll();
+  setStatus(`開いた: ${fileName}  キー ${allKeyFrames().length} 個` + (notes.length ? '  ' + notes.join('、') : ''), notes.some(n => n.startsWith('モデル')));
+}
+
+/** json の rest（書いた側の単位）と、このモデルの骨の位置を比べて倍率を出す（腰からの相対）。 */
+function fitRest(obj) {
+  if (!Array.isArray(obj.restBones) || !Array.isArray(obj.rest)) return { ok: false, message: 'json に元のポーズがありません' };
+  const hj = obj.restBones.indexOf(obj.hips), hi = M.byName.get(obj.hips);
+  const oj = hj >= 0 ? new THREE.Vector3().fromArray(obj.rest, hj * 3) : new THREE.Vector3();
+  const oi = hi != null ? M.restWP[hi] : new THREE.Vector3();
+  const a = [], b = [];
+  obj.restBones.forEach((n, k) => {
+    const i = M.byName.get(n);
+    if (i == null) return;
+    a.push(M.restWP[i].clone().sub(oi));
+    b.push(new THREE.Vector3().fromArray(obj.rest, k * 3).sub(oj));
+  });
+  if (a.length < 3) return { ok: false, message: 'モデルと名前が合う骨がほとんどありません' };
+  let ab = 0, bb = 0;
+  a.forEach((v, k) => { ab += v.dot(b[k]); bb += b[k].dot(b[k]); });
+  const scale = bb > 0 ? ab / bb : 1;
+  let error = 0;
+  a.forEach((v, k) => { error = Math.max(error, b[k].clone().multiplyScalar(scale).distanceTo(v)); });
+  if (!(scale > 0) || error > M.size * 0.02) return { ok: false, message: `骨の位置がモデルと合いません（最大 ${(error / M.size * 100).toFixed(1)}%）` };
+  return { ok: true, scale, error };
+}
+
+/** 差分のポーズ（Unity が書いたもの）を、骨ごとのキーにする。 */
+function posesToTracks(obj, scale) {
+  const order = (obj.bones || []).map((n, k) => [M.byName.get(n), k]).filter(([i]) => i != null).sort((x, y) => M.depth[x[0]] - M.depth[y[0]]);
+  const hi = M.byName.get(obj.hips) ?? M.hips;
+  const saved = savePose();
+  // HTML が書いたもの（キーの間も入っている）は、キーを打ったフレームだけにする
+  const poses = (obj.poses || []).filter(p => p.key !== 0);
+  for (const p of poses) {
+    applyRest();
+    const place = ([i, k]) => setWorldQuat(M.bones[i], new THREE.Quaternion().fromArray(p.rot, k * 4).multiply(M.restWQ[i]));
+    order.filter(([i]) => M.humanSet.has(i)).forEach(place);
+    if (obj.restFrom === 'unity') unityBonesToRaw();
+    if (p.hipsPos && hi != null) setWorldPos(M.bones[hi], M.restWP[hi].clone().add(new THREE.Vector3().fromArray(p.hipsPos).multiplyScalar(scale)));
+    // 人型でない骨の向きは、再生の姿（表示と同じ）での向きとして書かれている
+    const view = applyUnityView();
+    order.filter(([i]) => !M.humanSet.has(i)).forEach(place);
+    restoreUnityView(view);
+    const keyed = new Set(order.map(([i]) => i));
+    if (hi != null) keyed.add(hi);
+    for (const i of keyed) {
+      const b = M.bones[i];
+      const keys = track(i).keys;
+      keys.push({ f: p.frame, q: b.quaternion.clone(), p: i === M.hips ? b.position.clone() : null });
+    }
+    if (p.interp && !(p.interp === 1 && obj.restFrom !== 'unity')) D.interp.set(p.frame, p.interp);
+  }
+  for (const t of D.tracks.values()) t.keys.sort((a, b) => a.f - b.f);
+  restorePose(saved);
+}
+
+// ================================================================
+//  ファイルの受け取り
+// ================================================================
+
+/** 開くたびに増える。最初のモデルを取りに行っている間に自分で何か開いたら、最初のモデルは出さない。 */
+let openCount = 0;
+async function handleFiles(files) {
+  openCount++;
+  const jsons = files.filter(f => /\.json$/i.test(f.name) && !isModelInfo(f));
+  const hadModel = await loadModelFiles(files);
+  if (jsons.length) await loadJsonFile(jsons[0]);
+  if (!hadModel && !jsons.length) setStatus('FBX か .motion.json を落としてください', true);
+}
+
+const WANTED = /\.(fbx|json|meta|mat|png|jpe?g|tga)$/i;
+const isModelInfo = f => /\.motiontool\.json$/i.test(f.name);
+async function filesFromDrop(dt) {
+  const entries = [...dt.items].map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+  if (!entries.length) return [...dt.files];
+  const out = [];
+  async function walk(entry, depth) {
+    if (out.length > 4000) return;
+    if (entry.isFile) {
+      if (!WANTED.test(entry.name)) return;
+      const f = await new Promise((res, rej) => entry.file(res, rej));
+      f._path = entry.fullPath; // .meta と元のファイルを対にするのに使う
+      out.push(f);
+    } else if (entry.isDirectory && depth < 8) {
+      const reader = entry.createReader();
+      for (;;) {
+        const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        if (!batch.length) break;
+        for (const e of batch) await walk(e, depth + 1);
+      }
+    }
+  }
+  for (const e of entries) await walk(e, 0);
+  return out;
+}
+
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; $('drop').classList.add('show'); });
+window.addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('drop').classList.remove('show'); } });
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', async e => {
+  e.preventDefault();
+  dragDepth = 0;
+  $('drop').classList.remove('show');
+  await handleFiles(await filesFromDrop(e.dataTransfer));
+});
+
+$('bModel').onclick = () => $('fileModel').click();
+$('bFolder').onclick = () => $('fileFolder').click();
+$('fileModel').onchange = async e => { await handleFiles([...e.target.files]); e.target.value = ''; };
+$('fileFolder').onchange = async e => { await handleFiles([...e.target.files].filter(f => WANTED.test(f.name))); e.target.value = ''; };
+$('fileJson').onchange = async e => { if (e.target.files[0]) await loadJsonFile(e.target.files[0]); e.target.value = ''; };
+
+// ================================================================
+//  メニュー・ダイアログ
+// ================================================================
+
+function showMenu(x, y, items) {
+  const m = $('ctx');
+  m.innerHTML = '';
+  for (const it of items) {
+    if (!it) { m.appendChild(document.createElement('hr')); continue; }
+    const d = document.createElement('div');
+    d.textContent = it[0];
+    d.onclick = () => { hideMenu(); it[1](); };
+    m.appendChild(d);
+  }
+  m.style.display = 'block';
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(x, innerWidth - r.width - 4) + 'px';
+  m.style.top = Math.min(y, innerHeight - r.height - 4) + 'px';
+}
+function hideMenu() { $('ctx').style.display = 'none'; }
+window.addEventListener('pointerdown', e => { if (!$('ctx').contains(e.target)) hideMenu(); }, true);
+
+function choose(title, options) {
+  return new Promise(res => {
+    const m = $('choose');
+    m.querySelector('h3').textContent = title;
+    const list = m.querySelector('.list');
+    list.innerHTML = '';
+    options.forEach((o, i) => {
+      const b = document.createElement('button');
+      b.textContent = o;
+      b.onclick = () => { m.classList.remove('show'); res(i); };
+      list.appendChild(b);
+    });
+    m.onclick = e => { if (e.target === m) { m.classList.remove('show'); res(-1); } };
+    m.classList.add('show');
+  });
+}
+
+$('help').onclick = e => { if (e.target === $('help')) $('help').classList.remove('show'); };
+
+// ================================================================
+//  ボタンとキーボード
+// ================================================================
+
+function setMode(mode) { S.mode = mode; attachGizmo(); updateButtons(); }
+$('bMove').onclick = () => setMode('translate');
+$('bRot').onclick = () => setMode('rotate');
+$('bSpace').onclick = () => { S.space = S.space === 'local' ? 'world' : 'local'; gizmo.setSpace(S.space); updateButtons(); };
+$('bIK').onclick = () => {
+  S.ik = !S.ik;
+  if (!S.ik && S.sel && S.sel.kind !== 'bone') select({ kind: 'bone', i: M.limbs[S.sel.limb].c });
+  syncLimbs();
+  updateButtons();
+};
+$('bPin').onclick = () => { S.pin = !S.pin; updateButtons(); };
+$('bAuto').onclick = () => { S.autoKey = !S.autoKey; updateButtons(); };
+$('bOnion').onclick = () => { S.onion = !S.onion; updateOnion(); updateButtons(); };
+$('bBones').onclick = () => { S.boneView = { human: 'all', all: 'none', none: 'human' }[S.boneView]; updateOnion(); updateButtons(); refreshBoneListVisibility(); };
+$('bHelp').onclick = () => $('help').classList.add('show');
+$('bPose').onclick = e => {
+  const r = e.target.getBoundingClientRect();
+  showMenu(r.left, r.bottom + 2, [
+    ['コピー' + keyHint('copy'), copyPose],
+    ['貼り付け' + keyHint('paste'), () => pastePose(false)],
+    ['反転して貼り付け' + keyHint('pasteMirror'), () => pastePose(true)],
+    null,
+    ['全身を反転', () => mirrorPose('all')],
+    ['左 → 右', () => mirrorPose('L2R')],
+    ['右 → 左', () => mirrorPose('R2L')],
+    ['選んだ骨を反対側へ', () => mirrorPose('sel')],
+    null,
+    ['元のポーズに戻す', resetPose],
+  ]);
+};
+function resetPose() {
+  if (!M) return;
+  pushUndo();
+  const before = savePose();
+  const sel = selectedBone();
+  if (sel >= 0 && S.sel.kind === 'bone') { M.bones[sel].quaternion.copy(M.restQ[sel]); M.bones[sel].position.copy(M.restP[sel]); M.root.updateMatrixWorld(true); }
+  else applyRest();
+  afterPoseOp(before);
+}
+function newDoc() {
+  if (S.dirty && hasKeys() && !confirm('保存していない変更があります。捨てますか？')) return;
+  pushUndo();
+  D.tracks.clear();
+  D.shapes.clear();
+  D.interp.clear();
+  D.name = 'NewMotion';
+  docVer++;
+  S.fileHandle = null;
+  S.fileName = null;
+  S.dirty = false;
+  TL.sel.clear();
+  TL.fit = true;
+  goFrame(0);
+  refreshAll();
+}
+$('bNew').onclick = newDoc;
+$('bOpen').onclick = openJson;
+$('bSave').onclick = () => save(false);
+$('bSaveAs').onclick = () => save(true);
+$('bPlay').onclick = () => (S.playing ? stopPlay() : startPlay());
+$('bPrev').onclick = () => goFrame(S.frame - 1);
+$('bNext').onclick = () => goFrame(S.frame + 1);
+$('bPrevKey').onclick = () => jumpKey(-1);
+$('bNextKey').onclick = () => jumpKey(1);
+$('bKey').onclick = keySelected;
+$('bKeyAll').onclick = keyAll;
+$('bDel').onclick = deleteKeys;
+$('interp').onchange = e => setInterp(Number(e.target.value));
+$('frame').onchange = e => goFrame(Number(e.target.value) || 0);
+$('frames').onchange = e => {
+  pushUndo();
+  D.frameCount = Math.max(1, Math.round(Number(e.target.value) || 1));
+  docVer++; markDirty(); TL.fit = true; goFrame(Math.min(S.frame, D.frameCount));
+};
+$('fps').onchange = e => { pushUndo(); D.fps = clamp(Number(e.target.value) || 30, 1, 240); markDirty(); refreshAll(); };
+$('loop').onchange = e => { pushUndo(); D.loop = e.target.checked; docVer++; markDirty(); goFrame(S.frame); };
+
+// ================================================================
+//  設定（マウスとキーの割り当て）。ブラウザが覚える
+// ================================================================
+
+// [id, 表示名, 初期のキー]。キーは「Ctrl+Shift+Alt+コード」の形（無ければ ''）
+const ACTIONS = [
+  ['move', '移動', 'KeyW'], ['rotate', '回転', 'KeyE'], ['space', 'ローカル / ワールド', 'KeyX'],
+  ['key', 'キー', 'KeyK'], ['keyAll', '全身キー', 'Shift+KeyK'], ['deleteKey', 'キーを消す', 'Delete'],
+  ['prevFrame', '前のフレーム', 'Comma'], ['nextFrame', '次のフレーム', 'Period'],
+  ['prevKey', '前のキー', 'Shift+Comma'], ['nextKey', '次のキー', 'Shift+Period'],
+  ['play', '再生 / 停止', 'Space'], ['focus', '選んだ骨に寄る', 'KeyF'], ['deselect', '選択を外す', 'Escape'],
+  ['undo', '取り消し', 'Ctrl+KeyZ'], ['redo', 'やり直し', 'Ctrl+KeyY'],
+  ['copy', 'コピー', 'Ctrl+KeyC'], ['paste', '貼り付け', 'Ctrl+KeyV'], ['pasteMirror', '反転して貼り付け', 'Ctrl+Shift+KeyV'],
+  ['save', '保存', 'Ctrl+KeyS'], ['saveAs', '別名で保存', 'Ctrl+Shift+KeyS'], ['open', '開く', 'Ctrl+KeyO'],
+  ['ik', 'IK の入 / 切', ''], ['pin', '固定の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
+  ['onion', 'オニオンの入 / 切', ''], ['boneView', '骨の表示を切り替え', ''],
+  ['mirrorAll', '全身を反転', ''], ['mirrorSel', '選んだ骨を反対側へ', ''],
+];
+const RUN = {
+  move: () => setMode('translate'), rotate: () => setMode('rotate'), space: () => $('bSpace').click(),
+  key: () => keySelected(), keyAll: () => keyAll(), deleteKey: () => deleteKeys(),
+  prevFrame: () => goFrame(S.frame - 1), nextFrame: () => goFrame(S.frame + 1), prevKey: () => jumpKey(-1), nextKey: () => jumpKey(1),
+  play: () => $('bPlay').click(), focus: () => focusSelected(), deselect: () => { TL.sel.clear(); select(null); },
+  undo: () => undo(), redo: () => redo(), copy: () => (TL.sel.size ? copyKeys() : copyPose()), paste: () => (lastCopy === 'keys' ? pasteKeys() : pastePose(false)), pasteMirror: () => pastePose(true),
+  save: () => save(false), saveAs: () => save(true), open: () => openJson(),
+  ik: () => $('bIK').click(), pin: () => $('bPin').click(), autoKey: () => $('bAuto').click(),
+  onion: () => $('bOnion').click(), boneView: () => $('bBones').click(),
+  mirrorAll: () => mirrorPose('all'), mirrorSel: () => mirrorPose('sel'),
+};
+// 文字を打っている最中でも効くもの
+const WHILE_TYPING = new Set(['save', 'saveAs', 'open']);
+
+const MOUSE_ACTIONS = [['orbit', '視点を回す'], ['pan', '視点をずらす'], ['zoom', '寄る・引く（ドラッグ）']];
+const mb = (button, alt = false, shift = false, ctrl = false) => ({ button, alt, shift, ctrl });
+const MOUSE_PRESETS = [
+  ['右ドラッグで回す', { orbit: mb(2), pan: mb(1), zoom: null }],
+  ['Unity 風', { orbit: mb(0, true), pan: mb(1), zoom: mb(2, true) }],
+  ['Blender 風', { orbit: mb(1), pan: mb(1, false, true), zoom: mb(1, false, false, true) }],
+  ['左ドラッグで回す', { orbit: mb(0), pan: mb(2), zoom: null }],
+];
+
+function defaultSettings() {
+  return { mouse: JSON.parse(JSON.stringify(MOUSE_PRESETS[0][1])), keys: Object.fromEntries(ACTIONS.map(a => [a[0], a[2]])) };
+}
+function loadSettings() {
+  const cfg = defaultSettings();
+  try {
+    const saved = JSON.parse(localStorage.getItem('motiontool.settings') || 'null');
+    if (saved?.mouse) for (const [id] of MOUSE_ACTIONS) if (id in saved.mouse) cfg.mouse[id] = saved.mouse[id];
+    if (saved?.keys) for (const a of ACTIONS) if (typeof saved.keys[a[0]] === 'string') cfg.keys[a[0]] = saved.keys[a[0]];
+  } catch (e) { /* 壊れていたら初期設定 */ }
+  return cfg;
+}
+let CFG = loadSettings();
+function saveSettings() {
+  try { localStorage.setItem('motiontool.settings', JSON.stringify(CFG)); } catch (e) { /* 覚えられなくても動く */ }
+  applySettings();
+}
+
+const CODE_LABEL = { Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backslash: '\\', Minus: '-', Equal: '=', Backquote: '`',
+  ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Escape: 'Esc' };
+function comboLabel(combo) {
+  if (!combo) return 'なし';
+  return combo.split('+').map(p => CODE_LABEL[p] ?? p.replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'テンキー ')).join('+');
+}
+function comboOf(e) {
+  if (/^(Shift|Control|Alt|Meta)(Left|Right)$/.test(e.code) || !e.code) return '';
+  return (e.ctrlKey || e.metaKey ? 'Ctrl+' : '') + (e.shiftKey ? 'Shift+' : '') + (e.altKey ? 'Alt+' : '') + e.code;
+}
+function mouseLabel(b) {
+  if (!b) return 'なし';
+  return (b.ctrl ? 'Ctrl+' : '') + (b.shift ? 'Shift+' : '') + (b.alt ? 'Alt+' : '') + ['左', '中', '右'][b.button] + 'ドラッグ';
+}
+const keyLabel = id => comboLabel(CFG.keys[id]);
+const keyHint = id => (CFG.keys[id] ? ` (${keyLabel(id)})` : '');
+
+let keyToAction = new Map();
+function applySettings() {
+  keyToAction = new Map();
+  for (const a of ACTIONS) if (CFG.keys[a[0]]) keyToAction.set(CFG.keys[a[0]], a[0]);
+  // ボタンのヒント
+  const hint = { bMove: 'move', bRot: 'rotate', bSpace: 'space', bOpen: 'open', bSave: 'save', bSaveAs: 'saveAs', bPlay: 'play', bPrev: 'prevFrame', bNext: 'nextFrame',
+    bPrevKey: 'prevKey', bNextKey: 'nextKey', bKey: 'key', bKeyAll: 'keyAll', bDel: 'deleteKey' };
+  for (const [btn, id] of Object.entries(hint)) $(btn).title = CFG.keys[id] ? keyLabel(id) : '';
+  renderHelp();
+}
+
+/** 3D 表示でボタンを押したとき、割り当てに合わせて視点の動かし方を決める（OrbitControls が見る前に）。 */
+view.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'mouse' || e.target !== renderer.domElement) return;
+  const ctrl = e.ctrlKey || e.metaKey;
+  const hit = MOUSE_ACTIONS.map(a => a[0]).find(id => {
+    const b = CFG.mouse[id];
+    return b && b.button === e.button && !!b.alt === e.altKey && !!b.shift === e.shiftKey && !!b.ctrl === ctrl;
+  });
+  // OrbitControls は Ctrl / Shift が押されていると「回す」と「ずらす」を入れ替えるので、先に逆を渡しておく
+  const swap = ctrl || e.shiftKey;
+  const action = { orbit: swap ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE, pan: swap ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN, zoom: THREE.MOUSE.DOLLY }[hit] ?? -1;
+  orbit.mouseButtons = { LEFT: -1, MIDDLE: -1, RIGHT: -1 };
+  orbit.mouseButtons[['LEFT', 'MIDDLE', 'RIGHT'][e.button]] = action;
+}, true);
+// 中ボタンの自動スクロールを出さない
+renderer.domElement.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
+
+let keyCapture = null; // キーの割り当て待ち { id, btn }
+
+function renderSettings() {
+  const body = $('settingsBody');
+  body.innerHTML = '';
+  const el = (tag, cls, text) => { const x = document.createElement(tag); if (cls) x.className = cls; if (text != null) x.textContent = text; return x; };
+
+  body.appendChild(el('h4', null, 'マウス（3D 表示）'));
+  const presets = el('div', 'setrow');
+  for (const [name, m] of MOUSE_PRESETS) {
+    const b = el('button', null, name);
+    b.onclick = () => { CFG.mouse = JSON.parse(JSON.stringify(m)); saveSettings(); renderSettings(); };
+    presets.appendChild(b);
+  }
+  body.appendChild(presets);
+  for (const [id, label] of MOUSE_ACTIONS) {
+    const row = el('div', 'setrow');
+    row.appendChild(el('span', 'lb', label));
+    const sel = el('select');
+    [['-1', 'なし'], ['0', '左ドラッグ'], ['1', '中ドラッグ'], ['2', '右ドラッグ']].forEach(([v, t]) => { const o = el('option', null, t); o.value = v; sel.appendChild(o); });
+    const cur = CFG.mouse[id];
+    sel.value = cur ? String(cur.button) : '-1';
+    row.appendChild(sel);
+    const boxes = {};
+    for (const [k, t] of [['alt', 'Alt'], ['shift', 'Shift'], ['ctrl', 'Ctrl']]) {
+      const lab = el('label');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = !!cur?.[k];
+      lab.append(cb, t);
+      boxes[k] = cb;
+      row.appendChild(lab);
+    }
+    const update = () => {
+      const button = Number(sel.value);
+      CFG.mouse[id] = button < 0 ? null : mb(button, boxes.alt.checked, boxes.shift.checked, boxes.ctrl.checked);
+      saveSettings();
+    };
+    sel.onchange = update;
+    for (const cb of Object.values(boxes)) cb.onchange = update;
+    body.appendChild(row);
+  }
+  body.appendChild(el('div', 'note', 'クリックで選ぶ、右クリックでメッシュを隠す、ホイールで寄る、は固定'));
+
+  body.appendChild(el('h4', null, 'キー'));
+  const grid = el('div', 'keygrid');
+  for (const [id, label] of ACTIONS) {
+    const row = el('div', 'setrow');
+    row.appendChild(el('span', 'lb', label));
+    const btn = el('button', 'kb', keyLabel(id));
+    btn.onclick = () => {
+      if (keyCapture) keyCapture.btn.textContent = keyLabel(keyCapture.id);
+      keyCapture = { id, btn };
+      btn.textContent = 'キーを押す…';
+    };
+    const clr = el('button', 'kx', '×');
+    clr.title = '外す';
+    clr.onclick = () => { CFG.keys[id] = ''; keyCapture = null; saveSettings(); renderSettings(); };
+    row.append(btn, clr);
+    grid.appendChild(row);
+  }
+  body.appendChild(grid);
+
+  const foot = el('div', 'setrow');
+  const reset = el('button', null, '初期設定に戻す');
+  reset.onclick = () => { CFG = defaultSettings(); keyCapture = null; saveSettings(); renderSettings(); };
+  const close = el('button', null, '閉じる');
+  close.onclick = () => closeSettings();
+  foot.append(reset, close);
+  body.appendChild(foot);
+}
+function openSettings() { keyCapture = null; renderSettings(); $('settings').classList.add('show'); }
+function closeSettings() { keyCapture = null; $('settings').classList.remove('show'); }
+$('settings').onclick = e => { if (e.target === $('settings')) closeSettings(); };
+$('bSettings').onclick = openSettings;
+
+function renderHelp() {
+  const t = $('helpTable');
+  t.innerHTML = '';
+  const add = (k, v) => { const tr = document.createElement('tr'); const a = document.createElement('td'); const b = document.createElement('td'); a.textContent = k; b.textContent = v; tr.append(a, b); t.appendChild(tr); };
+  add('クリック', '骨を選ぶ（体をクリックしても選べる）');
+  for (const [id, label] of MOUSE_ACTIONS) if (CFG.mouse[id]) add(mouseLabel(CFG.mouse[id]), label);
+  add('ホイール', '寄る・引く');
+  add('右クリック', 'その場所のメッシュ（服など）を隠す。「表示」タブでも切り替え');
+  for (const [id, label] of ACTIONS) if (CFG.keys[id]) add(keyLabel(id), label);
+  add('目盛り', 'ドラッグでフレーム、右端の印で長さ、ホイールで拡大、ダブルクリックで全体');
+  add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shift で足す、右クリックでつなぎ方');
+  add('行', '名前で選ぶ、＋ かダブルクリックでキー、ホイールで縦、Shift+ホイールで横、Ctrl+ホイールで拡大');
+  add('コピー', 'キーを選んでいればキー、いなければポーズ');
+}
+
+window.addEventListener('keydown', e => {
+  // キーの割り当て待ち
+  if (keyCapture) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Esc はやめる（「選択を外す」に割り当てるときだけ、Esc そのものを入れられる）
+    if (e.code === 'Escape' && keyCapture.id !== 'deselect') { keyCapture = null; renderSettings(); return; }
+    const combo = comboOf(e);
+    if (!combo) return;
+    // 同じキーを使っていたほかの操作からは外す
+    for (const a of ACTIONS) if (CFG.keys[a[0]] === combo) CFG.keys[a[0]] = '';
+    CFG.keys[keyCapture.id] = combo;
+    keyCapture = null;
+    saveSettings();
+    renderSettings();
+    return;
+  }
+  const typing = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
+  const modal = ['help', 'settings', 'choose'].find(id => $(id).classList.contains('show'));
+  if (e.code === 'Escape') {
+    hideMenu();
+    if (modal === 'help') { $('help').classList.remove('show'); return; }
+    if (modal === 'settings') { closeSettings(); return; }
+  }
+  const id = keyToAction.get(comboOf(e));
+  if (!id || modal) return;
+  if (typing && !WHILE_TYPING.has(id)) return;
+  e.preventDefault();
+  RUN[id]();
+});
+applySettings();
+
+// ================================================================
+//  ループ
+// ================================================================
+
+let lastT = performance.now();
+function tick(now) {
+  const dt = Math.min(0.1, (now - lastT) / 1000);
+  lastT = now;
+  if (S.playing && M) {
+    S.playT += dt * D.fps;
+    if (S.playT > D.frameCount) {
+      if (D.loop) S.playT %= D.frameCount;
+      else { S.playT = D.frameCount; stopPlay(); }
+    }
+    poseAt(S.playT);
+    syncLimbs();
+    const f = Math.floor(S.playT);
+    if (f !== S.frame) { S.frame = f; $('frame').value = f; drawTimeline(); }
+  }
+  scene.updateMatrixWorld();
+  if (M) updateMarkers();
+  const view = M && S.unityView ? applyUnityView() : null;
+  renderer.render(scene, camera);
+  restoreUnityView(view);
+  requestAnimationFrame(tick);
+}
+updateButtons();
+updateTitle();
+resize();
+requestAnimationFrame(tick);
+
+// ================================================================
+//  最初に出すモデル。ページとして開いたとき（http）だけ。file:// では読めない
+// ================================================================
+
+/** index.html から見た場所。無いファイルは飛ばす。.motiontool.json は人型の骨の対応と関節の軸（Unity で FBX から書き出した物）。 */
+const DEFAULT_MODEL = [
+  'akane ver1.0/FBX/PC_akane.fbx',
+  'akane ver1.0/FBX/PC_akane.fbx.motiontool.json',
+  'akane ver1.0/TEX/C_undertights.png',
+  'akane ver1.0/TEX/EX3_Body1.png',
+  'akane ver1.0/TEX/EX3_Body2(SiroinoSotai).png',
+  'akane ver1.0/TEX/EX3_clothes.png',
+  'akane ver1.0/TEX/EX3_hair.png',
+];
+
+async function filesFromUrls(urls) {
+  const files = await Promise.all(urls.map(async u => {
+    try {
+      const r = await fetch(u);
+      if (!r.ok) return null;
+      const f = new File([await r.blob()], decodeURIComponent(u.split('/').pop()));
+      f._path = decodeURIComponent(new URL(u, location.href).pathname);
+      return f;
+    } catch (e) { return null; }
+  }));
+  return files.filter(Boolean);
+}
+
+async function loadDefaultModel() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  const opened = openCount;
+  const files = await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
+  if (openCount !== opened || M || !files.some(f => /\.fbx$/i.test(f.name))) return;
+  await handleFiles(files);
+  S.dirty = false;
+  updateTitle();
+}
+loadDefaultModel();
+
+// 確認用（コンソールから触る）
+window.MT = {
+  THREE, D, S, get M() { return M; }, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
+  mirrorPose, copyPose, pastePose, select, undo, redo, pick, newDoc, keyAll, allKeyFrames, constrainBone, camera, gizmo,
+  applyUnityView, restoreUnityView, analyzeLimb, orbit, get settings() { return CFG; },
+  TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY,
+  /** ワールドの位置 → 画面（クライアント座標）。 */
+  toScreen(v) {
+    const r = renderer.domElement.getBoundingClientRect();
+    const s = screenOf(v, r);
+    return { x: Math.round(r.left + s.x), y: Math.round(r.top + s.y) };
+  },
+  async loadUrls(urls) { await handleFiles(await filesFromUrls(urls)); },
+};
+</script>
+</body>
+</html>

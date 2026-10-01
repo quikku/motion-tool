@@ -1,0 +1,12 @@
+Motion Tool
+
+To the extent possible under law, the author(s) have dedicated all copyright
+and related and neighboring rights to this software to the public domain
+worldwide. This software is distributed without any warranty.
+
+CC0 1.0 Universal (Public Domain Dedication)
+https://creativecommons.org/publicdomain/zero/1.0/
+Full legal code: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+法律で認められる範囲で、作者はこのソフトウェアの著作権と関連する権利をすべて放棄し、
+世界中でパブリックドメインに提供します。無保証です。
