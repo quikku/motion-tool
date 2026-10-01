@@ -82,7 +82,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 3px 0; }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 70; }
 .modal.show { display: flex; }
-body.unity .alone { display: none; }
+body.unity .alone, body.sample .alone { display: none; }
 #ask input { width: 440px; max-width: 80vw; }
 #ask .row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
 .modal .box { background: var(--panel); border: 1px solid #50545c; border-radius: 6px; padding: 12px 14px; min-width: 260px; max-width: 520px; }
@@ -179,7 +179,7 @@ body.unity .alone { display: none; }
 <div id="help" class="modal"><div class="box">
   <h3>操作</h3>
   <table id="helpTable"></table>
-  <p style="color:var(--dim);margin:8px 0 0">保存した.motion.jsonをUnityに置いて、右クリック → Motion Tool → .animにする</p>
+  <p id="helpNote" style="color:var(--dim);margin:8px 0 0">保存した.motion.jsonをUnityに置いて、右クリック → Motion Tool → .animにする</p>
   <p style="color:var(--dim);margin:8px 0 0">最初のモデル: <a href="https://minto-akayama.booth.pm/items/8861598" target="_blank" rel="noopener" style="color:var(--accent)">茜犬 -Akane-</a>（CC0、赤山みんと）</p>
 </div></div>
 <div id="settings" class="modal"><div class="box"><h3>設定</h3><div id="settingsBody"></div></div></div>
@@ -266,6 +266,8 @@ let docVer = 0;
 const S = {
   /** Unityから開いたとき: { path: 保存先の.anim（まだ無ければnull）, dir: 保存先の候補のフォルダ }。 */
   unity: null,
+  /** 茜犬の見本（Unityを通さずに .anim を書く）。 */
+  sample: false, animHandle: null,
   frame: 0, playing: false, playT: 0, sel: null, edited: new Set(), shapeEdited: new Set(), shapeSel: null, tab: 'bones',
   autoKey: true, ik: true, pin: false, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
   dirty: false, fileHandle: null, fileName: null, pendingJson: null,
@@ -545,6 +547,7 @@ function setModel(group, name, meta, info = null) {
   else { human = guessHuman(); M.humanFrom = '名前から推測'; }
   setHuman(human);
   if (info && info.model === name) applyHumanFromJson(info);
+  M.muscleInfo = info && info.model === name && info.muscle?.bones?.length ? info : null;
   const axesFrom = info && info.model === name && setUnityInfo(info) ? 'Unity' : loadRememberedInfo() ? 'Unity（前回）' : '';
 
   // 前のモデルのキーは、骨の名前で引き継ぐ
@@ -907,6 +910,30 @@ function limbHingeRest(L) { return L.hingeInA.clone().applyQuaternion(M.restWQ[L
  * Unity が測ったマッスルの回転軸（json の axes）を使う。モデルごとにブラウザに覚えておき、次から FBX だけ開いても使う。
  * 軸は元のポーズでのワールドの向き（three.js の向き）。
  */
+/**
+ * Humanoid の再生で動く骨の位置（playOffset）。Unity の向き・メートルで書かれているので、HTML の向き・単位にしたものを持つ。
+ * 覚えておいた物（units が html）はそのまま。
+ */
+function playOffsetsOf(obj) {
+  const po = obj.playOffset;
+  if (po && po.units === 'html') return po;
+  if (!Array.isArray(po) || !po.length) return null;
+  const fit = Array.isArray(obj.rest) ? fitRest(obj) : { ok: false };
+  const scale = fit.ok ? fit.scale : 1;
+  return { units: 'html', list: po.map(e => ({ bone: e.bone, d: mirrorV(vecOf(e.d)).divideScalar(scale).toArray() })) };
+}
+/** 骨ごとの、HTML のローカルの位置の足し分。再生した姿の表示（applyUnityView）で足す */
+function buildPlayOffsets() {
+  M.playOffsets = new Map();
+  const po = M.unityInfo?.playOffset;
+  if (!po) return;
+  for (const e of po.list) {
+    const i = M.byName.get(e.bone);
+    if (i == null || M.parent[i] < 0 || i === M.hips) continue;
+    M.playOffsets.set(i, vecOf(e.d).applyQuaternion(M.restWQ[M.parent[i]].clone().invert()));
+  }
+}
+
 function setUnityInfo(obj, remember = true) {
   if (!M || !obj || !Array.isArray(obj.axes) || !obj.axes.length) return false;
   const map = new Map();
@@ -919,7 +946,8 @@ function setUnityInfo(obj, remember = true) {
   }
   if (map.size < 10) return false;
   M.unityAxes = map;
-  M.unityInfo = { axes: obj.axes, twist: obj.twist || null, unityRest: obj.unityRest || null, zeroPose: obj.zeroPose || null };
+  M.unityInfo = { axes: obj.axes, twist: obj.twist || null, unityRest: obj.unityRest || null, zeroPose: obj.zeroPose || null, playOffset: playOffsetsOf(obj) };
+  buildPlayOffsets();
 
   // 肘・膝のヒンジも Unity の曲げの軸に（向きの正負は今のヒンジにそろえる）
   for (const L of M.limbs) {
@@ -1113,7 +1141,7 @@ function analyzeLimb(L) {
 function applyUnityView() {
   if (!M || !M.limbs) return null;
   const saved = [];
-  const keep = i => saved.push([i, M.bones[i].quaternion.clone()]);
+  const keep = i => saved.push([i, M.bones[i].quaternion.clone(), M.bones[i].position.clone()]);
   for (const L of M.limbs) {
     if (!L.view) continue;
     const v = L.view, A = M.bones[L.a], B = M.bones[L.b], C = M.bones[L.c];
@@ -1135,12 +1163,20 @@ function applyUnityView() {
       M.bones[i].quaternion.copy(q);
     }
   }
+  // 再生では骨の位置も少し動く
+  if (M.playOffsets?.size) {
+    const have = new Set(saved.map(x => x[0]));
+    for (const [i, off] of M.playOffsets) {
+      if (!have.has(i)) { keep(i); have.add(i); }
+      M.bones[i].position.copy(M.restP[i]).add(off);
+    }
+  }
   M.root.updateMatrixWorld(true);
   return saved;
 }
 function restoreUnityView(saved) {
   if (!saved) return;
-  for (const [i, q] of saved) M.bones[i].quaternion.copy(q);
+  for (const [i, q, p] of saved) { M.bones[i].quaternion.copy(q); M.bones[i].position.copy(p); }
   M.root.updateMatrixWorld(true);
 }
 
@@ -2865,6 +2901,326 @@ function buildFile() {
 
 const clipNameOf = fileName => fileName.replace(/\.json$/i, '').replace(/\.motion$/i, '');
 
+// ================================================================
+//  .anim を直接書く（茜犬の見本用）。Unity を通さずに、骨の回転からマッスルを計算する
+//  式は Unity の実物と比べて確かめた（README の「.anim を直接書く」）:
+//    ローカル回転 = pre × ねじり・振りの回転（符号 × マッスル × 可動範囲）× post の逆
+//    重心 = 腰の位置 + Σ（骨のワールドの回転 × 骨ごとの一定のずれ）
+//    体の向き = 腰の向きから、上 → 右 → 上の順に最短の回転で合わせた枠 × 一定のずれ
+//  モデルの数値は FBX名.motiontool.json の muscle（Unity で「HTML 用に書き出す」と入る）
+// ================================================================
+
+const quatOf = a => new THREE.Quaternion(a[0], a[1], a[2], a[3]);
+const vecOf = a => new THREE.Vector3(a[0], a[1], a[2]);
+const V_X = new THREE.Vector3(1, 0, 0), V_Y = new THREE.Vector3(0, 1, 0);
+/** 腕・脚の 3 本組。ねじりが上の骨から下の骨へ受け渡されるので、まとめて解く */
+const ANIM_CHAINS = [
+  ['LeftUpperArm', 'LeftLowerArm', 'LeftHand'], ['RightUpperArm', 'RightLowerArm', 'RightHand'],
+  ['LeftUpperLeg', 'LeftLowerLeg', 'LeftFoot'], ['RightUpperLeg', 'RightLowerLeg', 'RightFoot'],
+];
+
+/** 書ける状態なら { scale, bones, others, ... }。だめなら { error }。無ければ null（モデルの数値が無い） */
+function buildAnimModel() {
+  const info = M?.muscleInfo;
+  if (!info?.muscle) return null;
+  const mu = info.muscle;
+  const fit = fitRest(info);
+  if (!fit.ok) return { error: fit.message };
+  const bones = new Map(), byHuman = {};
+  const playOf = new Map((info.playOffset || []).map(e => [e.bone, vecOf(e.d)]));
+  for (const b of mu.bones) {
+    const i = M.byName.get(b.bone);
+    if (i == null) return { error: `${b.bone} がモデルにありません` };
+    const e = {
+      name: b.bone, i, human: b.human, parent: b.parent, pre: quatOf(b.pre), post: quatOf(b.post), sign: b.sign, min: b.min, max: b.max, muscle: b.muscle,
+      rest: quatOf(b.restRot), parentRest: quatOf(b.parentRestRot), restPos: vecOf(b.restPos), mass: vecOf(b.mass), play: playOf.get(b.bone) || new THREE.Vector3(),
+    };
+    e.preInv = e.pre.clone().invert();
+    bones.set(b.bone, e);
+    byHuman[b.human] = e;
+  }
+  for (const c of ANIM_CHAINS) for (const h of c) if (!byHuman[h]) return { error: `人型の骨 ${h} がありません` };
+  if (!byHuman.Hips) return { error: '腰がありません' };
+  const others = new Map();
+  for (const o of mu.others || []) others.set(o.bone, { name: o.bone, i: M.byName.get(o.bone) ?? null, parent: o.parent, rest: quatOf(o.restRot) });
+  // 人型でない骨のうち、キーを打った物（人型の骨の祖先と、ルートは除く）
+  const ancestor = new Set();
+  for (const b of bones.values()) for (let p = M.parent[b.i]; p >= 0; p = M.parent[p]) ancestor.add(M.names[p]);
+  return {
+    info, scale: fit.scale, fitError: fit.error, bones, byHuman, others, humanScale: mu.humanScale, names: mu.names, bodyOffset: quatOf(mu.bodyOffset),
+    order: mu.bones.map(b => bones.get(b.bone)),
+    isExtra: name => others.has(name) && others.get(name).i != null && !ancestor.has(name),
+  };
+}
+
+/** roots の中から、前のフレームの値に近い物（円の上で）。前が無ければ 0 に近い物 */
+function pickRoot(roots, prevA) {
+  const ref = prevA ?? 0;
+  const dist = r => Math.abs(Math.atan2(Math.sin(r - ref), Math.cos(r - ref)));
+  let best = roots[0];
+  for (const r of roots) if (dist(r) < dist(best)) best = r;
+  // 前の値との差の分、2π を足し引きして、値が飛ばないようにする
+  return prevA == null ? best : ref + Math.atan2(Math.sin(best - ref), Math.cos(best - ref));
+}
+
+/** SwingTwist の逆。マッスルの空間の回転 → ねじり・振り Y・振り Z の角度（ラジアン） */
+function muscleAngles(q) {
+  let { x, y, z, w } = q;
+  if (w < 0) { x = -x; y = -y; z = -z; w = -w; }
+  const X = x / w, B = y / w, C = z / w, d = 1 + X * X;
+  return [2 * Math.atan(X), 2 * Math.atan((B - X * C) / d), 2 * Math.atan((C + X * B) / d)];
+}
+
+/** F(a) = 0 になる a（-π〜π）を全部。区間を粗く切って符号が変わる所を二分法で詰める（無ければ 0） */
+function solveAll(F) {
+  const roots = [];
+  let prevA = -Math.PI, prevF = F(prevA);
+  for (let k = 1; k <= 72; k++) {
+    const a = -Math.PI + k * (2 * Math.PI / 72), f = F(a);
+    if (prevF * f <= 0) {
+      let x0 = prevA, x1 = a, f0 = prevF;
+      for (let it = 0; it < 40; it++) { const xm = (x0 + x1) / 2, fm = F(xm); if (f0 * fm <= 0) x1 = xm; else { x0 = xm; f0 = fm; } }
+      const r = (x0 + x1) / 2;
+      if (!roots.some(v => Math.abs(v - r) < 1e-6)) roots.push(r);
+    }
+    prevA = a; prevF = f;
+  }
+  return roots.length ? roots : [0];
+}
+
+/**
+ * 今のポーズ（表示されている姿）→ マッスル・RootT・RootQ・人型でない骨のローカル回転。
+ * Unity の空間にそろえるので、X を反転する（json と同じ）。
+ */
+function animFrame(am, prev) {
+  M.root.updateMatrixWorld(true);
+  const world = (e) => mirrorQ(deltaOf(e.i)).multiply(e.rest).normalize();
+  const W = new Map();
+  for (const e of am.bones.values()) W.set(e.name, world(e));
+  const worldOf = name => {
+    if (W.has(name)) return W.get(name);
+    const o = am.others.get(name);
+    const q = o ? (o.i != null ? world(o) : o.rest) : new THREE.Quaternion();
+    W.set(name, q);
+    return q;
+  };
+  const local = e => (e.parent ? worldOf(e.parent) : e.parentRest).clone().invert().multiply(W.get(e.name));
+  // マッスルの空間の角度（ラジアン）
+  const angles = e => muscleAngles(e.preInv.clone().multiply(local(e)).multiply(e.post));
+  // 親のねじりの軸（親のローカルで post × X）まわりに、子のローカル回転から角度 a を抜く
+  const untwist = (parent, childLocal, a) => parent.post.clone().multiply(new THREE.Quaternion().setFromAxisAngle(V_X, -a)).multiply(parent.post.clone().invert()).multiply(childLocal);
+  const muscles = new Float64Array(am.names.length);
+  // マッスルの値（-1〜1 が可動範囲）
+  const muscleOf = (e, d, rad) => { const deg = rad * 180 / Math.PI * e.sign[d]; return deg >= 0 ? deg / e.max[d] : deg / -e.min[d]; };
+  const put = (e, rad) => {
+    for (let d = 0; d < 3; d++) if (e.muscle[d] >= 0) muscles[e.muscle[d]] = muscleOf(e, d, rad[d]);
+  };
+  const done = new Set(), chains = new Map();
+  for (const [hu, hl, he] of ANIM_CHAINS) {
+    const u = am.byHuman[hu], l = am.byHuman[hl], e = am.byHuman[he];
+    const ll = local(l), le = local(e), au = angles(u);
+    // ねじりの受け渡しは、解が 2 つある（180° ちがい）。前のフレームの解にいちばん近い方を選ぶ
+    // （範囲を超えたポーズでも、フレームの途中で解が入れ替わらないように）。最初のフレームは、0 に近い方
+    const alpha = pickRoot(solveAll(a => { const q = l.preInv.clone().multiply(untwist(u, ll, a)).multiply(l.post); return q.y * q.w - q.x * q.z; }), prev?.chains.get(hu)?.alpha);
+    const beta = pickRoot(solveAll(a => { const q = e.preInv.clone().multiply(untwist(l, le, a)).multiply(e.post); return q.x * Math.sign(q.w || 1); }), prev?.chains.get(hu)?.beta);
+    chains.set(hu, { alpha, beta });
+    const al = muscleAngles(l.preInv.clone().multiply(untwist(u, ll, alpha)).multiply(l.post));
+    const ae = muscleAngles(e.preInv.clone().multiply(untwist(l, le, beta)).multiply(e.post));
+    put(u, [au[0] + alpha, au[1], au[2]]);
+    put(l, [al[0] + beta, al[1], al[2]]);
+    put(e, ae);
+    done.add(u.name); done.add(l.name); done.add(e.name);
+  }
+  for (const e of am.bones.values()) if (!done.has(e.name) && e.human !== 'Hips') put(e, angles(e));
+
+  // 位置: 腰は元の位置からのずれ（HTML の単位 → Unity のメートル）。ほかは親から順に
+  const hipsE = am.byHuman.Hips;
+  const P = new Map([[hipsE.name, hipsE.restPos.clone().add(mirrorV(hipsDelta()).multiplyScalar(am.scale))]]);
+  for (const e of am.order) {
+    if (e === hipsE) continue;
+    const p = am.bones.get(e.parent);
+    const off = e.restPos.clone().sub(p.restPos).add(e.play).applyQuaternion(p.rest.clone().invert()).applyQuaternion(W.get(p.name));
+    P.set(e.name, P.get(p.name).clone().add(off));
+  }
+  // 体の向き
+  const pos = h => P.get(am.byHuman[h].name);
+  const up = pos('LeftUpperArm').clone().add(pos('RightUpperArm')).sub(pos('LeftUpperLeg')).sub(pos('RightUpperLeg')).normalize();
+  const right = pos('RightUpperLeg').clone().sub(pos('LeftUpperLeg')).add(pos('RightUpperArm')).sub(pos('LeftUpperArm')).normalize();
+  let f = W.get(hipsE.name).clone().multiply(hipsE.rest.clone().invert());
+  const turn = (axis, to) => { f = new THREE.Quaternion().setFromUnitVectors(axis.clone().applyQuaternion(f).normalize(), to).multiply(f); };
+  turn(V_Y, up); turn(V_X, right); turn(V_Y, up);
+  const rootQ = f.multiply(am.bodyOffset).normalize();
+  if (prev && rootQ.dot(prev.rootQ) < 0) rootQ.set(-rootQ.x, -rootQ.y, -rootQ.z, -rootQ.w);
+  // 重心
+  const com = P.get(hipsE.name).clone();
+  for (const e of am.bones.values()) if (e.mass.lengthSq() > 0) com.add(e.mass.clone().applyQuaternion(W.get(e.name)));
+  const rootT = com.divideScalar(am.humanScale);
+
+  // 人型でない骨: Unity の空間でのローカルの回転
+  const extras = new Map();
+  for (const [name, o] of am.others) {
+    if (!am.isExtra(name) || !D.tracks.get(o.i)?.keys.length) continue;
+    const q = (o.parent ? worldOf(o.parent) : new THREE.Quaternion()).clone().invert().multiply(worldOf(name)).normalize();
+    extras.set(name, q);
+  }
+  return { muscles, rootT, rootQ, extras, chains };
+}
+
+// ---------- カーブ → .anim の文章 ----------
+
+const yf = x => {
+  if (x === Infinity) return 'Infinity';
+  if (x === -Infinity) return '-Infinity';
+  if (Math.abs(x) < 1e-9) return '0';
+  return x.toFixed(10).replace(/0+$/, '').replace(/\.$/, '');
+};
+const MODE_LINEAR = 2, MODE_CONSTANT = 3; // Unity の TangentMode
+
+/** 直線で足りるフレームを間引く。keep[i] が true のフレームを残す（comps: 成分ごとの値の配列、誤差は成分の最大） */
+function reduceKeys(times, comps, modes, anchor, tol) {
+  const n = times.length, keep = new Array(n).fill(false);
+  const simplify = (a, b) => {
+    if (b - a < 2) return;
+    let worst = 0, at = -1;
+    for (let i = a + 1; i < b; i++) {
+      const u = (times[i] - times[a]) / (times[b] - times[a]);
+      let d = 0;
+      for (const v of comps) d = Math.max(d, Math.abs(v[a] + (v[b] - v[a]) * u - v[i]));
+      if (d > worst) { worst = d; at = i; }
+    }
+    if (worst <= tol) return;
+    keep[at] = true;
+    simplify(a, at); simplify(at, b);
+  };
+  let start = 0;
+  for (let i = 0; i < n; i++) {
+    if (!anchor[i] && modes[i] === 1 && (i === 0 || modes[i - 1] === 1)) continue;
+    keep[i] = true;
+    if (i > start) simplify(start, i);
+    start = i;
+  }
+  return keep;
+}
+
+/** 1 本分のキー。modes[i] はそのキーから次のキーまで（1 = 直線、2 = 止める）。 */
+function curveKeys(times, comps, modes, keep) {
+  const idx = [];
+  keep.forEach((k, i) => { if (k) idx.push(i); });
+  return idx.map((i, j) => {
+    const prev = j > 0 ? idx[j - 1] : -1, next = j + 1 < idx.length ? idx[j + 1] : -1;
+    const slope = (a, b, c) => (times[b] === times[a] ? 0 : (comps[c][b] - comps[c][a]) / (times[b] - times[a]));
+    const outConst = next >= 0 && modes[i] === 2, inConst = prev >= 0 && modes[prev] === 2;
+    const inS = comps.map((_, c) => (prev < 0 ? (next >= 0 ? slope(i, next, c) : 0) : inConst ? Infinity : slope(prev, i, c)));
+    const outS = comps.map((_, c) => (next < 0 ? (prev >= 0 ? slope(prev, i, c) : 0) : outConst ? Infinity : slope(i, next, c)));
+    const left = inConst ? MODE_CONSTANT : MODE_LINEAR, right = outConst ? MODE_CONSTANT : MODE_LINEAR;
+    return { t: times[i], v: comps.map(c => c[i]), inS, outS, mode: (left << 1) | (right << 4) | (left !== right ? 1 : 0) };
+  });
+}
+
+function floatCurveYaml(keys, attribute, path, classId) {
+  const out = ['  - serializedVersion: 2', '    curve:', '      serializedVersion: 2', '      m_Curve:'];
+  for (const k of keys) {
+    out.push('      - serializedVersion: 3', `        time: ${yf(k.t)}`, `        value: ${yf(k.v[0])}`, `        inSlope: ${yf(k.inS[0])}`, `        outSlope: ${yf(k.outS[0])}`,
+      `        tangentMode: ${k.mode}`, '        weightedMode: 0', '        inWeight: 0.33333334', '        outWeight: 0.33333334');
+  }
+  out.push('      m_PreInfinity: 2', '      m_PostInfinity: 2', '      m_RotationOrder: 4', `    attribute: ${attribute}`, `    path: ${path}`, `    classID: ${classId}`, '    script: {fileID: 0}', '    flags: 0');
+  return out;
+}
+
+function quatCurveYaml(keys, path) {
+  const v4 = a => `{x: ${yf(a[0])}, y: ${yf(a[1])}, z: ${yf(a[2])}, w: ${yf(a[3])}}`;
+  const out = ['  - curve:', '      serializedVersion: 2', '      m_Curve:'];
+  for (const k of keys) {
+    out.push('      - serializedVersion: 3', `        time: ${yf(k.t)}`, `        value: ${v4(k.v)}`, `        inSlope: ${v4(k.inS)}`, `        outSlope: ${v4(k.outS)}`,
+      `        tangentMode: ${k.mode}`, '        weightedMode: 0',
+      '        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334, w: 0.33333334}', '        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334, w: 0.33333334}');
+  }
+  out.push('      m_PreInfinity: 2', '      m_PostInfinity: 2', '      m_RotationOrder: 4', `    path: ${path}`);
+  return out;
+}
+
+/** 毎フレームのポーズ（マッスル・RootT・RootQ・シェイプ・人型でない骨）から、.anim の文章を作る。書けなければ { error } */
+function buildAnim(name) {
+  const am = buildAnimModel();
+  if (!am) return { error: 'このモデルは、ブラウザだけでは .anim を書けません（Unity で「HTML 用に書き出す」をした情報がありません）' };
+  if (am.error) return { error: am.error };
+  const N = D.frameCount, fps = D.fps, count = N + 1;
+  const times = new Float64Array(count).map((_, f) => f / fps);
+  const keyFrames = new Set(allKeyFrames());
+  const modes = new Array(count).fill(1);
+  for (let f = 0; f < count; f++) modes[f] = keyFrames.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? 2 : 1);
+  const anchor = modes.map((m, f) => keyFrames.has(f) || f === 0 || f === N || m === 2 || (f > 0 && modes[f - 1] === 2));
+
+  const muscle = am.names.map(() => new Float64Array(count));
+  const rootT = [0, 1, 2].map(() => new Float64Array(count)), rootQ = [0, 1, 2, 3].map(() => new Float64Array(count));
+  const extraNames = [...am.others.keys()].filter(n => am.isExtra(n) && D.tracks.get(am.others.get(n).i)?.keys.length);
+  const extraRot = new Map(extraNames.map(n => [n, [0, 1, 2, 3].map(() => new Float64Array(count))]));
+  const shapes = [...D.shapes].filter(([, t]) => t.keys.length).map(([id, t]) => ({ id, t, v: new Float64Array(count), sh: M.shapeById.get(id) }));
+
+  const saved = savePose();
+  let prev = null; const prevE = new Map();
+  try {
+    for (let f = 0; f < count; f++) {
+      poseAt(f);
+      const view = applyUnityView();
+      const r = animFrame(am, prev);
+      restoreUnityView(view);
+      prev = r;
+      r.muscles.forEach((v, m) => { muscle[m][f] = v; });
+      rootT.forEach((a, c) => { a[f] = r.rootT.getComponent(c); });
+      rootQ.forEach((a, c) => { a[f] = [r.rootQ.x, r.rootQ.y, r.rootQ.z, r.rootQ.w][c]; });
+      for (const [n, q] of r.extras) {
+        const p = prevE.get(n);
+        if (p && q.dot(p) < 0) q.set(-q.x, -q.y, -q.z, -q.w);
+        prevE.set(n, q);
+        extraRot.get(n).forEach((a, c) => { a[f] = [q.x, q.y, q.z, q.w][c]; });
+      }
+      for (const s of shapes) s.v[f] = evalShape(s.t, f);
+    }
+  } finally {
+    restorePose(saved);
+  }
+
+  // 許容差は Unity 側の変換（WebMotionBridge）と同じ
+  const TOL = { muscle: 0.0001, rootT: 0.00005, rootQ: 0.00005, extra: 0.00005, shape: 0.05 };
+  const curves = [];
+  const keysOf = (comps, tol) => curveKeys(times, comps, modes, reduceKeys(times, comps, modes, anchor, tol));
+  ['RootT.x', 'RootT.y', 'RootT.z'].forEach((n, c) => curves.push(floatCurveYaml(keysOf([rootT[c]], TOL.rootT), n, '', 95)));
+  ['RootQ.x', 'RootQ.y', 'RootQ.z', 'RootQ.w'].forEach((n, c) => curves.push(floatCurveYaml(keysOf([rootQ[c]], TOL.rootQ), n, '', 95)));
+  am.names.forEach((n, m) => curves.push(floatCurveYaml(keysOf([muscle[m]], TOL.muscle), n, '', 95)));
+  const shapeCurves = shapes.map(s => keysOf([s.v], TOL.shape));
+  // Unity の Transform のパス（モデルのルートの下から。親が人型の骨でもたどる）
+  const parentOf = n => am.bones.get(n)?.parent ?? am.others.get(n)?.parent ?? '';
+  const pathOf = n => { const a = []; for (let p = n; p; p = parentOf(p)) a.unshift(p); return a.join('/'); };
+  const rotCurves = extraNames.map(n => ({ path: pathOf(n), keys: keysOf(extraRot.get(n), TOL.extra) }));
+
+  const float = [...curves.flat()], editor = [...float];
+  shapes.forEach((s, j) => {
+    const y = floatCurveYaml(shapeCurves[j], 'blendShape.' + s.sh.name, s.sh.path, 137);
+    float.push(...y); editor.push(...y);
+  });
+  const rot = rotCurves.flatMap(c => quatCurveYaml(c.keys, c.path));
+  const eulerless = rotCurves.flatMap(c => ['x', 'y', 'z', 'w'].flatMap((a, k) => floatCurveYaml(c.keys.map(key => ({ ...key, v: [key.v[k]], inS: [key.inS[k]], outS: [key.outS[k]] })), 'm_LocalRotation.' + a, c.path, 4)));
+  const bool = b => (b ? 1 : 0);
+  const lines = [
+    '%YAML 1.1', '%TAG !u! tag:unity3d.com,2011:', '--- !u!74 &7400000', 'AnimationClip:',
+    '  m_ObjectHideFlags: 0', '  m_CorrespondingSourceObject: {fileID: 0}', '  m_PrefabInstance: {fileID: 0}', '  m_PrefabAsset: {fileID: 0}',
+    `  m_Name: ${name}`, '  serializedVersion: 7', '  m_Legacy: 0', '  m_Compressed: 0', '  m_UseHighQualityCurve: 1',
+    rot.length ? '  m_RotationCurves:' : '  m_RotationCurves: []', ...rot,
+    '  m_CompressedRotationCurves: []', '  m_EulerCurves: []', '  m_PositionCurves: []', '  m_ScaleCurves: []',
+    float.length ? '  m_FloatCurves:' : '  m_FloatCurves: []', ...float,
+    '  m_PPtrCurves: []', `  m_SampleRate: ${yf(fps)}`, '  m_WrapMode: 0', '  m_Bounds:', '    m_Center: {x: 0, y: 0, z: 0}', '    m_Extent: {x: 0, y: 0, z: 0}',
+    '  m_ClipBindingConstant:', '    genericBindings: []', '    pptrCurveMapping: []',
+    '  m_AnimationClipSettings:', '    serializedVersion: 2', '    m_AdditiveReferencePoseClip: {fileID: 0}', '    m_AdditiveReferencePoseTime: 0',
+    '    m_StartTime: 0', `    m_StopTime: ${yf(N / fps)}`, '    m_OrientationOffsetY: 0', '    m_Level: 0', '    m_CycleOffset: 0', '    m_HasAdditiveReferencePose: 0',
+    `    m_LoopTime: ${bool(D.loop)}`, '    m_LoopBlend: 0', '    m_LoopBlendOrientation: 1', '    m_LoopBlendPositionY: 1', '    m_LoopBlendPositionXZ: 1',
+    '    m_KeepOriginalOrientation: 1', '    m_KeepOriginalPositionY: 1', '    m_KeepOriginalPositionXZ: 1', '    m_HeightFromFeet: 0', '    m_Mirror: 0',
+    editor.length + eulerless.length ? '  m_EditorCurves:' : '  m_EditorCurves: []', ...editor, ...eulerless,
+    '  m_EulerEditorCurves: []', '  m_HasGenericRootTransform: 0', '  m_HasMotionFloatCurves: 0', '  m_Events: []', '',
+  ];
+  return { text: lines.join('\n'), keys: float.filter(l => l.startsWith('      - serializedVersion: 3')).length, bytes: lines.reduce((a, l) => a + l.length + 1, 0), fitError: am.fitError, scale: am.scale };
+}
+
 /**
  * Unityから開いたときの保存。Unityが.animにして、プロジェクトに置く。
  * 編集用のデータ（骨ごとのキー）も渡す。Unityが.animと一緒に覚えておき、次に開くときに返してくる。
@@ -2902,9 +3258,41 @@ async function saveToUnity(as) {
   setStatus(`保存: ${res.path}` + (res.message ? '  ' + res.message : ''));
 }
 
+/** 茜犬の見本の保存。Unity を通さずに、ブラウザが .anim を書く */
+async function saveAnim(as) {
+  const base = (D.name || 'NewMotion').replace(/\.anim$/i, '');
+  const built = buildAnim(base);
+  if (built.error) { setStatus(built.error, true); return; }
+  try {
+    let name;
+    if (window.showSaveFilePicker) {
+      if (as || !S.animHandle) {
+        S.animHandle = await window.showSaveFilePicker({ suggestedName: `${base}.anim`, types: [{ description: 'Unity AnimationClip', accept: { 'application/octet-stream': ['.anim'] } }] });
+      }
+      const w = await S.animHandle.createWritable();
+      await w.write(built.text);
+      await w.close();
+      name = S.animHandle.name;
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([built.text], { type: 'application/octet-stream' }));
+      a.download = name = `${base}.anim`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+    D.name = name.replace(/\.anim$/i, '');
+    S.dirty = false;
+    updateTitle();
+    setStatus(`保存: ${name}（${Math.round(built.bytes / 1024)} KB）`);
+  } catch (e) {
+    if (e.name !== 'AbortError') setStatus('保存できません: ' + e.message, true);
+  }
+}
+
 async function save(as) {
   if (!M) { setStatus('先にFBXを開いてください', true); return; }
   if (!hasKeys()) { setStatus('キーがありません', true); return; }
+  if (S.sample) { await saveAnim(as); return; }
   if (S.unity) { await saveToUnity(as); return; }
   const text = JSON.stringify(buildFile());
   try {
@@ -3081,6 +3469,7 @@ function posesToTracks(obj, scale) {
 /** 開くたびに増える。最初のモデルを取りに行っている間に自分で何か開いたら、最初のモデルは出さない。 */
 let openCount = 0;
 async function handleFiles(files, texByMat = null) {
+  if (S.sample) { setStatus('この見本は茜犬だけです', true); return; }
   openCount++;
   const jsons = files.filter(f => /\.json$/i.test(f.name) && !isModelInfo(f));
   const hadModel = await loadModelFiles(files, texByMat);
@@ -3207,7 +3596,7 @@ $('bPin').onclick = () => { S.pin = !S.pin; updateButtons(); };
 $('bAuto').onclick = () => { S.autoKey = !S.autoKey; updateButtons(); };
 $('bOnion').onclick = () => { S.onion = !S.onion; updateOnion(); updateButtons(); };
 $('bBones').onclick = () => { S.boneView = { human: 'all', all: 'none', none: 'human' }[S.boneView]; updateOnion(); updateButtons(); refreshBoneListVisibility(); };
-$('bHelp').onclick = () => $('help').classList.add('show');
+$('bHelp').onclick = () => { renderHelp(); $('help').classList.add('show'); };
 $('bPose').onclick = e => {
   const r = e.target.getBoundingClientRect();
   showMenu(r.left, r.bottom + 2, [
@@ -3295,7 +3684,7 @@ const RUN = {
   prevFrame: () => goFrame(S.frame - 1), nextFrame: () => goFrame(S.frame + 1), prevKey: () => jumpKey(-1), nextKey: () => jumpKey(1),
   play: () => $('bPlay').click(), focus: () => focusSelected(), deselect: () => { TL.sel.clear(); select(null); },
   undo: () => undo(), redo: () => redo(), copy: () => (TL.sel.size ? copyKeys() : copyPose()), paste: () => (lastCopy === 'keys' ? pasteKeys() : pastePose(false)), pasteMirror: () => pastePose(true),
-  save: () => save(false), saveAs: () => save(true), open: () => openJson(),
+  save: () => save(false), saveAs: () => save(true), open: () => { if (!S.sample) openJson(); },
   ik: () => $('bIK').click(), pin: () => $('bPin').click(), autoKey: () => $('bAuto').click(),
   onion: () => $('bOnion').click(), boneView: () => $('bBones').click(),
   mirrorAll: () => mirrorPose('all'), mirrorSel: () => mirrorPose('sel'),
@@ -3465,6 +3854,7 @@ function renderHelp() {
   add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shiftで足す、右クリックでつなぎ方');
   add('行', '名前で選ぶ、＋ かダブルクリックでキー、ホイールで縦、Shift+ホイールで横、Ctrl+ホイールで拡大');
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
+  $('helpNote').textContent = S.sample ? '保存すると、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '保存した.motion.jsonをUnityに置いて、右クリック → Motion Tool → .animにする';
 }
 
 window.addEventListener('keydown', e => {
@@ -3603,6 +3993,8 @@ async function loadDefaultModel() {
   if (openCount !== opened || M || !files.some(f => /\.fbx$/i.test(f.name))) return;
   await handleFiles(files, unity ? unity.texByMat : null);
   if (unity) await openFromUnity(unity.man);
+  // Unity を通さないページは、茜犬の見本（モデルの数値が入っているので、ブラウザだけで .anim を書ける）
+  else if (M?.muscleInfo) { S.sample = true; document.body.classList.add('sample'); }
   S.dirty = false;
   updateTitle();
 }
@@ -3613,7 +4005,7 @@ window.MT = {
   THREE, D, S, get M() { return M; }, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
   mirrorPose, copyPose, pastePose, select, undo, redo, pick, newDoc, keyAll, allKeyFrames, constrainBone, camera, gizmo,
   applyUnityView, restoreUnityView, analyzeLimb, orbit, get settings() { return CFG; },
-  TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY,
+  TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY, buildAnim, buildAnimModel, animFrame,
   /** ワールドの位置 → 画面（クライアント座標）。 */
   toScreen(v) {
     const r = renderer.domElement.getBoundingClientRect();
