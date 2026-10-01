@@ -1,17 +1,17 @@
 # Motion Tool
 
-ブラウザで Humanoid のモーションを作るツール。
+ブラウザでHumanoidのモーションを作るツールです。
 
 https://quikku.github.io/motion-tool/
 
-FBX かモデルのフォルダを落として、骨を回してキーを打ち、`.motion.json` に保存する。
-落としたファイルはブラウザの中で読むだけで、どこにも送らない。
+FBXかモデルのフォルダを画面にドラッグ＆ドロップし、骨を回してキーを打ちます。作ったモーションは`.motion.json`として保存できます。
+読み込んだファイルはブラウザの中で処理するだけで、外部には送信しません。
 
 ## クレジット
 
-- 最初に出るモデル: [茜犬 -Akane-](https://minto-akayama.booth.pm/items/8861598)（CC0、赤山みんと）
-- [three.js](https://threejs.org/)（MIT）
+- 最初に表示されるモデルは[茜犬 -Akane-](https://minto-akayama.booth.pm/items/8861598)です。赤山みんとさんがCC0で公開しています。
+- 描画には[three.js](https://threejs.org/)を使っています。ライセンスはMITです。
 
 ## ライセンス
 
-CC0（`LICENSE.txt`）
+CC0です。全文は`LICENSE.txt`にあります。

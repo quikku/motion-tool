@@ -110,7 +110,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <body>
 <div id="app">
   <div id="toolbar">
-    <button id="bModel" title="FBX を開く（テクスチャや .meta も一緒に選べる）">FBX</button>
+    <button id="bModel" title="FBXを開く（テクスチャや.metaも一緒に選べる）">FBX</button>
     <button id="bFolder" title="モデルのフォルダを開く">フォルダ</button>
     <span class="sep"></span>
     <button id="bNew">新規</button>
@@ -122,8 +122,8 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bRot" title="E">回転</button>
     <button id="bSpace" title="X">ローカル</button>
     <span class="sep"></span>
-    <button id="bIK" title="手先・足先を IK で動かす">IK</button>
-    <button id="bPin" title="体を動かしても、IK の手先・足先をその場に残す">固定</button>
+    <button id="bIK" title="手先・足先をIKで動かす">IK</button>
+    <button id="bPin" title="体を動かしても、IKの手先・足先をその場に残す">固定</button>
     <button id="bAuto" title="動かし終えたらキーを打つ">自動キー</button>
     <span class="sep"></span>
     <button id="bPose">ポーズ ▾</button>
@@ -141,7 +141,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <div id="meshes" style="display:none"></div>
   </div>
   <div id="view">
-    <div id="empty"><div>FBX かモデルのフォルダをここに落とす<br><span style="font-size:12px">.meta も一緒だと人型の骨がわかる</span></div></div>
+    <div id="empty"><div>FBXかモデルのフォルダをここに落とす<br><span style="font-size:12px">.metaも一緒だと人型の骨がわかる</span></div></div>
   </div>
   <div id="timeline">
     <div id="tlresize"></div>
@@ -175,7 +175,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <div id="help" class="modal"><div class="box">
   <h3>操作</h3>
   <table id="helpTable"></table>
-  <p style="color:var(--dim);margin:8px 0 0">保存した .motion.json を Unity に置いて、右クリック → Motion Tool → .anim にする</p>
+  <p style="color:var(--dim);margin:8px 0 0">保存した.motion.jsonをUnityに置いて、右クリック → Motion Tool → .animにする</p>
   <p style="color:var(--dim);margin:8px 0 0">最初のモデル: <a href="https://minto-akayama.booth.pm/items/8861598" target="_blank" rel="noopener" style="color:var(--accent)">茜犬 -Akane-</a>（CC0、赤山みんと）</p>
 </div></div>
 <div id="settings" class="modal"><div class="box"><h3>設定</h3><div id="settingsBody"></div></div></div>
@@ -292,7 +292,7 @@ async function loadModelFiles(files) {
   let fbx = fbxs[0];
   if (fbxs.length > 1) {
     fbxs.sort((a, b) => a.name.localeCompare(b.name));
-    const i = await choose('どの FBX？', fbxs.map(f => f.name));
+    const i = await choose('どのFBX？', fbxs.map(f => f.name));
     if (i < 0) return true;
     fbx = fbxs[i];
   }
@@ -328,7 +328,7 @@ async function loadModelFiles(files) {
     group = new FBXLoader(manager).parse(buffer, '');
   } catch (e) {
     console.error(e);
-    setStatus('FBX を読めません: ' + e.message, true);
+    setStatus('FBXを読めません: ' + e.message, true);
     return true;
   }
   // FBXLoader は軸の設定（Z-up など）を見ないので、Unity と同じく Y-up・+Z 向きに回す
@@ -543,7 +543,7 @@ function setModel(group, name, meta, info = null) {
   $('empty').style.display = 'none';
   S.sel = null;
   goFrame(S.frame);
-  setStatus(`${name}  骨 ${bones.length} 本、人型 ${M.humanSet.size} 本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は ${axesFrom}` : ''));
+  setStatus(`${name}  骨${bones.length}本、人型${M.humanSet.size}本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は${axesFrom}` : ''));
   if (S.pendingJson) {
     const p = S.pendingJson;
     S.pendingJson = null;
@@ -1832,7 +1832,7 @@ function copyPose() {
     own: one < 0 ? ownDeltas() : null, hips: one < 0 ? hipsDelta() : null, model: M.name,
   };
   lastCopy = 'pose';
-  setStatus(one >= 0 ? `${M.names[one]} をコピー` : '全身をコピー');
+  setStatus(one >= 0 ? `${M.names[one]}をコピー` : '全身をコピー');
 }
 function pastePose(mirror) {
   if (!M || !clipboard) return;
@@ -2335,7 +2335,7 @@ function copyKeys() {
   if (!items.length) return;
   keyClip = { items, minF, interp: [...new Set(items.map(it => it.f))].map(f => [f - minF, D.interp.get(f) ?? 0]) };
   lastCopy = 'keys';
-  setStatus(`キー ${items.length} 個をコピー`);
+  setStatus(`キー${items.length}個をコピー`);
 }
 
 /** コピーしたキーを、いちばん早いキーが今のフレームに来るように貼る。 */
@@ -2649,7 +2649,7 @@ function refreshMeshList() {
     row.style.display = !q || meshLabel(m).toLowerCase().includes(q) ? '' : 'none';
   });
   const hidden = M.meshes.filter(m => !m.visible).length;
-  $('tabMeshes').textContent = hidden ? `表示 (${hidden} 隠)` : '表示';
+  $('tabMeshes').textContent = hidden ? `表示(${hidden}隠)` : '表示';
 }
 
 /** 3D 表示で右クリックした所のメッシュを隠すメニュー。 */
@@ -2676,7 +2676,7 @@ function meshMenu(e) {
 
 function updateUnkeyed() {
   const n = S.edited.size + S.shapeEdited.size;
-  $('unkeyed').textContent = n ? `キー無しの変更 ${n}` : '';
+  $('unkeyed').textContent = n ? `キー無しの変更${n}` : '';
 }
 
 function refreshKeysUI() {
@@ -2810,7 +2810,7 @@ function buildFile() {
 const clipNameOf = fileName => fileName.replace(/\.json$/i, '').replace(/\.motion$/i, '');
 
 async function save(as) {
-  if (!M) { setStatus('先に FBX を開いてください', true); return; }
+  if (!M) { setStatus('先にFBXを開いてください', true); return; }
   if (!hasKeys()) { setStatus('キーがありません', true); return; }
   const text = JSON.stringify(buildFile());
   try {
@@ -2856,11 +2856,11 @@ async function openJson() {
 
 async function loadJsonFile(file, handle = null) {
   let obj;
-  try { obj = JSON.parse(await file.text()); } catch (e) { setStatus('json を読めません', true); return; }
-  if (obj.format !== 'MotionToolWeb') { setStatus('Motion Tool の json ではありません', true); return; }
+  try { obj = JSON.parse(await file.text()); } catch (e) { setStatus('jsonを読めません', true); return; }
+  if (obj.format !== 'MotionToolWeb') { setStatus('Motion Toolのjsonではありません', true); return; }
   if (!M) {
     S.pendingJson = { obj, name: file.name, handle };
-    setStatus(`${obj.model || 'FBX'} を開くと ${file.name} を読み込みます`);
+    setStatus(`${obj.model || 'FBX'}を開くと${file.name}を読み込みます`);
     return;
   }
   applyMotionJson(obj, file.name, handle);
@@ -2872,7 +2872,7 @@ function applyMotionJson(obj, fileName, handle) {
   const notes = [];
   if (obj.model && obj.model !== M.name) notes.push(`モデルが違う（${obj.model}）`);
   applyHumanFromJson(obj);
-  if (obj.model === M.name && setUnityInfo(obj)) notes.push('関節の軸は Unity');
+  if (obj.model === M.name && setUnityInfo(obj)) notes.push('関節の軸はUnity');
   D.fps = obj.fps || 30;
   D.frameCount = Math.max(1, obj.frameCount || 60);
   D.loop = !!obj.loop;
@@ -2891,7 +2891,7 @@ function applyMotionJson(obj, fileName, handle) {
   } else if (obj.poses?.length) {
     const fit = fitRest(obj);
     if (!fit.ok) { undoStack.pop(); setStatus(fit.message, true); return; }
-    notes.push(`骨の位置の差 最大 ${(fit.error / M.size * 100).toFixed(2)}%`);
+    notes.push(`骨の位置の差 最大${(fit.error / M.size * 100).toFixed(2)}%`);
     posesToTracks(obj, fit.scale);
   }
   // シェイプ: HTML が書いたキーがあればそれ、無ければ Unity が書いたカーブのキー
@@ -2915,7 +2915,7 @@ function applyMotionJson(obj, fileName, handle) {
     });
     D.shapes.set(id, { keys });
   }
-  if (missingShapes) notes.push(`モデルに無いシェイプ ${missingShapes} 個`);
+  if (missingShapes) notes.push(`モデルに無いシェイプ${missingShapes}個`);
   docVer++;
   S.fileHandle = handle;
   S.fileName = fileName;
@@ -2924,12 +2924,12 @@ function applyMotionJson(obj, fileName, handle) {
   TL.fit = true;
   goFrame(0);
   refreshAll();
-  setStatus(`開いた: ${fileName}  キー ${allKeyFrames().length} 個` + (notes.length ? '  ' + notes.join('、') : ''), notes.some(n => n.startsWith('モデル')));
+  setStatus(`開いた: ${fileName}  キー${allKeyFrames().length}個` + (notes.length ? '  ' + notes.join('、') : ''), notes.some(n => n.startsWith('モデル')));
 }
 
 /** json の rest（書いた側の単位）と、このモデルの骨の位置を比べて倍率を出す（腰からの相対）。 */
 function fitRest(obj) {
-  if (!Array.isArray(obj.restBones) || !Array.isArray(obj.rest)) return { ok: false, message: 'json に元のポーズがありません' };
+  if (!Array.isArray(obj.restBones) || !Array.isArray(obj.rest)) return { ok: false, message: 'jsonに元のポーズがありません' };
   const hj = obj.restBones.indexOf(obj.hips), hi = M.byName.get(obj.hips);
   const oj = hj >= 0 ? new THREE.Vector3().fromArray(obj.rest, hj * 3) : new THREE.Vector3();
   const oi = hi != null ? M.restWP[hi] : new THREE.Vector3();
@@ -2946,7 +2946,7 @@ function fitRest(obj) {
   const scale = bb > 0 ? ab / bb : 1;
   let error = 0;
   a.forEach((v, k) => { error = Math.max(error, b[k].clone().multiplyScalar(scale).distanceTo(v)); });
-  if (!(scale > 0) || error > M.size * 0.02) return { ok: false, message: `骨の位置がモデルと合いません（最大 ${(error / M.size * 100).toFixed(1)}%）` };
+  if (!(scale > 0) || error > M.size * 0.02) return { ok: false, message: `骨の位置がモデルと合いません（最大${(error / M.size * 100).toFixed(1)}%）` };
   return { ok: true, scale, error };
 }
 
@@ -2991,7 +2991,7 @@ async function handleFiles(files) {
   const jsons = files.filter(f => /\.json$/i.test(f.name) && !isModelInfo(f));
   const hadModel = await loadModelFiles(files);
   if (jsons.length) await loadJsonFile(jsons[0]);
-  if (!hadModel && !jsons.length) setStatus('FBX か .motion.json を落としてください', true);
+  if (!hadModel && !jsons.length) setStatus('FBXか.motion.jsonを落としてください', true);
 }
 
 const WANTED = /\.(fbx|json|meta|mat|png|jpe?g|tga)$/i;
@@ -3173,7 +3173,7 @@ const ACTIONS = [
   ['undo', '取り消し', 'Ctrl+KeyZ'], ['redo', 'やり直し', 'Ctrl+KeyY'],
   ['copy', 'コピー', 'Ctrl+KeyC'], ['paste', '貼り付け', 'Ctrl+KeyV'], ['pasteMirror', '反転して貼り付け', 'Ctrl+Shift+KeyV'],
   ['save', '保存', 'Ctrl+KeyS'], ['saveAs', '別名で保存', 'Ctrl+Shift+KeyS'], ['open', '開く', 'Ctrl+KeyO'],
-  ['ik', 'IK の入 / 切', ''], ['pin', '固定の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
+  ['ik', 'IKの入 / 切', ''], ['pin', '固定の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
   ['onion', 'オニオンの入 / 切', ''], ['boneView', '骨の表示を切り替え', ''],
   ['mirrorAll', '全身を反転', ''], ['mirrorSel', '選んだ骨を反対側へ', ''],
 ];
@@ -3195,8 +3195,8 @@ const MOUSE_ACTIONS = [['orbit', '視点を回す'], ['pan', '視点をずらす
 const mb = (button, alt = false, shift = false, ctrl = false) => ({ button, alt, shift, ctrl });
 const MOUSE_PRESETS = [
   ['右ドラッグで回す', { orbit: mb(2), pan: mb(1), zoom: null }],
-  ['Unity 風', { orbit: mb(0, true), pan: mb(1), zoom: mb(2, true) }],
-  ['Blender 風', { orbit: mb(1), pan: mb(1, false, true), zoom: mb(1, false, false, true) }],
+  ['Unity風', { orbit: mb(0, true), pan: mb(1), zoom: mb(2, true) }],
+  ['Blender風', { orbit: mb(1), pan: mb(1, false, true), zoom: mb(1, false, false, true) }],
   ['左ドラッグで回す', { orbit: mb(0), pan: mb(2), zoom: null }],
 ];
 
@@ -3270,7 +3270,7 @@ function renderSettings() {
   body.innerHTML = '';
   const el = (tag, cls, text) => { const x = document.createElement(tag); if (cls) x.className = cls; if (text != null) x.textContent = text; return x; };
 
-  body.appendChild(el('h4', null, 'マウス（3D 表示）'));
+  body.appendChild(el('h4', null, 'マウス（3D表示）'));
   const presets = el('div', 'setrow');
   for (const [name, m] of MOUSE_PRESETS) {
     const b = el('button', null, name);
@@ -3349,7 +3349,7 @@ function renderHelp() {
   add('右クリック', 'その場所のメッシュ（服など）を隠す。「表示」タブでも切り替え');
   for (const [id, label] of ACTIONS) if (CFG.keys[id]) add(keyLabel(id), label);
   add('目盛り', 'ドラッグでフレーム、右端の印で長さ、ホイールで拡大、ダブルクリックで全体');
-  add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shift で足す、右クリックでつなぎ方');
+  add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shiftで足す、右クリックでつなぎ方');
   add('行', '名前で選ぶ、＋ かダブルクリックでキー、ホイールで縦、Shift+ホイールで横、Ctrl+ホイールで拡大');
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
 }
