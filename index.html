@@ -1184,16 +1184,54 @@ function keyBones(list, shapes = []) {
 }
 const keyShapes = ids => keyBones([], ids);
 
-/** 実際にカーブにするキー列（ClipBuilder.EffectiveKeys と同じ）。0 と最終フレームに前後のキーの値を置く。 */
+/**
+ * 実際にカーブにするキー列。0 と最終フレームに前後のキーの値を置く。
+ * ループのときは loopKeys（キーが 2 つ以上のとき）。
+ */
 function effectiveKeys(keys, copy) {
   const last = D.frameCount;
   const ks = keys.filter(k => k.f >= 0 && k.f <= last).map(k => copy(k, k.f, D.interp.get(k.f) ?? 0));
+  if (D.loop && ks.length >= 2) return loopKeys(ks, copy, last);
   if (ks.length) {
-    if (D.loop && ks[0].f === 0 && ks[ks.length - 1].f !== last) ks.push(copy(ks[0], last, ks[0].mode));
     if (ks[0].f > 0) ks.unshift(copy(ks[0], 0, 2));
     if (ks[ks.length - 1].f < last) ks.push(copy(ks[ks.length - 1], last, 0));
   }
   return ks;
+}
+
+/**
+ * ループのキー列。キーが last ごとにくり返すとみなし、前後に 1 周ずらした写しを 2 つずつ置く
+ * （写しは 0 より前・last より後ろにはみ出す）。こうすると:
+ * - つなぎ目の接線が、ループの反対側のキーまで見て決まる（両端を 0 にしないので、つなぎ目で動きが止まらない）
+ * - 最初のキーより前と最後のキーより後ろは、最後のキー → 最初のキーへ補間してつながる
+ * 0 と last の両方にキーがあれば、last のキーを 0 のキーの 1 周あととみなす。写しは 1 周ごとに
+ * その差（last の値 − 0 の値）だけずらす（shiftLaps）。前へ進み続けるルートの位置でも、つなぎ目の速さがそろう。
+ */
+function loopKeys(ks, copy, last) {
+  const both = ks[0].f === 0 && ks[ks.length - 1].f === last;
+  const base = both ? ks.slice(0, -1) : ks, m = base.length;
+  const lap = j => {
+    const q = Math.floor(j / m), k = base[j - q * m];
+    return Object.assign(copy(k, k.f + q * last, k.mode), { lap: q });
+  };
+  const out = [lap(-2), lap(-1), ...ks, ...(both ? [] : [lap(m)]), lap(m + 1)];
+  if (both) { out.lapFrom = 2; out.lapTo = 2 + ks.length - 1; }
+  return out;
+}
+
+/** loopKeys の写しの値（y は ks とそろった 1 成分の配列）を、1 周ぶんの差だけずらす。 */
+function shiftLaps(ks, y) {
+  if (ks.lapFrom == null) return y;
+  const d = y[ks.lapTo] - y[ks.lapFrom];
+  ks.forEach((k, i) => { if (k.lap) y[i] += k.lap * d; });
+  return y;
+}
+
+/** キーの無いフレーム 0 から次のフレームまでのつなぎ方（1 = 直線、2 = 止める）。ループなら最後のキーから回ってくる区間 */
+function startInterp() {
+  if (!D.loop) return 2;
+  const frames = allKeyFrames();
+  return frames.length && D.interp.get(frames[frames.length - 1]) === 2 ? 2 : 1;
 }
 
 /**
@@ -1260,7 +1298,7 @@ function prepTrack(t, rest, lower) {
   }
   const vals = [], tans = [];
   for (let c = 0; c < 6; c++) {
-    const y = ks.map((k, i) => c < 3 ? rv[i][c] : (k.p ? k.p.toArray()[c - 3] : 0));
+    const y = shiftLaps(ks, ks.map((k, i) => c < 3 ? rv[i][c] : (k.p ? k.p.toArray()[c - 3] : 0)));
     vals.push(y);
     tans.push(autoTangents(ks, y));
   }
@@ -1329,7 +1367,7 @@ function setShapeValue(id, v) {
 function prepShape(t) {
   if (t.ver === docVer) return t.cache;
   const ks = effectiveKeys(t.keys, (k, f, mode) => ({ f, v: k.v, mode }));
-  const y = ks.map(k => k.v);
+  const y = shiftLaps(ks, ks.map(k => k.v));
   t.cache = { ks, y, m: autoTangents(ks, y) };
   t.ver = docVer;
   return t.cache;
@@ -2747,18 +2785,23 @@ function stopPlay() {
  * キーの間も毎フレームのポーズを書く（Unity はマッスルで補間するので、キーだけだと間の形が HTML と変わる）。
  * Unity 側で、直線で足りるキーは間引く。Constant の区間は間を書かない。
  */
+/** カーブで書くフレーム（0〜最終フレーム）を frames に足す: キーと、止めない区間の中のフレーム全部 */
+function curveFrames(ks, frames) {
+  const last = D.frameCount;
+  ks.forEach((k, j) => {
+    if (k.f >= 0 && k.f <= last) frames.add(k.f);
+    if (j + 1 < ks.length && k.mode !== 2) for (let f = Math.max(k.f + 1, 0); f < ks[j + 1].f && f <= last; f++) frames.add(f);
+  });
+  return frames;
+}
+
 function buildFile() {
   const saved = savePose();
   const tracked = [...D.tracks.keys()].filter(i => D.tracks.get(i).keys.length).sort((a, b) => a - b);
   const real = new Set(allKeyFrames());
-  const frames = new Set();
-  for (const i of tracked) {
-    const { ks } = prepTrack(D.tracks.get(i), M.restQ[i], M.lowerView?.get(i));
-    ks.forEach((k, j) => {
-      frames.add(k.f);
-      if (j + 1 < ks.length && k.mode !== 2) for (let f = k.f + 1; f < ks[j + 1].f; f++) frames.add(f);
-    });
-  }
+  const frames = new Set(tracked.length ? [0, D.frameCount] : []);
+  for (const i of tracked) curveFrames(prepTrack(D.tracks.get(i), M.restQ[i], M.lowerView?.get(i)).ks, frames);
+  const startMode = startInterp();
   // ルートは骨として書かない（FBXに無い）。ルートの動きは、腰のワールドの向きと位置に入って出ていく
   const written = tracked.filter(i => i !== M.rootBone);
   if (written.length < tracked.length && !written.includes(M.hips)) { written.push(M.hips); written.sort((a, b) => a - b); }
@@ -2772,7 +2815,7 @@ function buildFile() {
     written.forEach((i, k) => { if (!M.humanSet.has(i) && i !== M.hips) put(k); });
     restoreUnityView(view);
     const hp = hipsDelta();
-    const interp = real.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? 2 : 1);
+    const interp = real.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? startMode : 1);
     return { frame: f, interp, key: real.has(f) ? 1 : 0, rot, hipsPos: [r6(hp.x), r6(hp.y), r6(hp.z)] };
   });
   restorePose(saved);
@@ -2782,17 +2825,11 @@ function buildFile() {
   for (const [id, t] of D.shapes) {
     if (!t.keys.length) continue;
     const sh = M.shapeById.get(id);
-    const { ks } = prepShape(t);
-    const fr = new Set();
-    ks.forEach((k, j) => {
-      fr.add(k.f);
-      if (j + 1 < ks.length && k.mode !== 2) for (let f = k.f + 1; f < ks[j + 1].f; f++) fr.add(f);
-    });
-    const list = [...fr].sort((a, b) => a - b);
+    const list = [...curveFrames(prepShape(t).ks, new Set([0, D.frameCount]))].sort((a, b) => a - b);
     const own = new Set(t.keys.map(k => k.f));
     shapeCurves.push({
       path: sh.path, name: sh.name, frames: list, values: list.map(f => r6(evalShape(t, f))),
-      interp: list.map(f => (own.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? 2 : 1))),
+      interp: list.map(f => (own.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? startMode : 1))),
       key: list.map(f => (own.has(f) ? 1 : 0)),
     });
     shapeKeys.push({ mesh: sh.path, name: sh.name, keys: t.keys.map(k => ({ f: k.f, v: r6(k.v) })) });
@@ -3068,7 +3105,8 @@ function buildAnim(name) {
   const times = new Float64Array(count).map((_, f) => f / fps);
   const keyFrames = new Set(allKeyFrames());
   const modes = new Array(count).fill(1);
-  for (let f = 0; f < count; f++) modes[f] = keyFrames.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? 2 : 1);
+  const startMode = startInterp();
+  for (let f = 0; f < count; f++) modes[f] = keyFrames.has(f) ? (D.interp.get(f) === 2 ? 2 : 1) : (f === 0 ? startMode : 1);
   const anchor = modes.map((m, f) => keyFrames.has(f) || f === 0 || f === N || m === 2 || (f > 0 && modes[f - 1] === 2));
 
   const muscle = am.names.map(() => new Float64Array(count));
