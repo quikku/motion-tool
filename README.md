@@ -1,4 +1,4 @@
-# Motion Tool
+# SisMotionTooL
 
 ブラウザでHumanoidのモーションを作り、UnityのAnimationClip（.anim）として保存するツールです。
 
@@ -13,10 +13,10 @@ https://quikku.github.io/motion-tool/
 Unityのスクリプトを使うと、シーンのアバターをこのツールで開けます。
 
 1. [MotionTool.unitypackage](MotionTool.unitypackage)をUnityにインポートします（Unity 2022.3で確認。アバターはHumanoidです）。
-2. ヒエラルキーでアバターを選び、`Tools/Motion Tool`を押します。ブラウザでそのアバターが開きます。
+2. ヒエラルキーでアバターを選び、`Tools/SisMotionTooL`を押します。ブラウザでそのアバターが開きます。
 3. 骨を回してキーを打ち、「保存」を押します。Assetsの中に.animができます。
 
-既にある.animは、右クリックして`Motion Tool/開く`で開けます。
+既にある.animは、右クリックして`SisMotionTooL/開く`で開けます。
 
 ## クレジット
 

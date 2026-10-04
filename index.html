@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Motion Tool</title>
+<title>SisMotionTooL</title>
 <style>
 :root {
   --bg: #1c1d20; --panel: #25272b; --panel2: #2f3136; --line: #3a3d44; --text: #d9dbe0; --dim: #8a8f99;
@@ -169,7 +169,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <div id="help" class="modal"><div class="box">
   <h3>操作</h3>
   <table id="helpTable"></table>
-  <p id="helpNote" style="color:var(--dim);margin:8px 0 0">保存した.motion.jsonをUnityに置いて、右クリック → Motion Tool → .animにする</p>
+  <p id="helpNote" style="color:var(--dim);margin:8px 0 0">保存した.motion.jsonをUnityに置いて、右クリック → SisMotionTooL → .animにする</p>
   <p style="color:var(--dim);margin:8px 0 0">最初のモデル: <a href="https://minto-akayama.booth.pm/items/8861598" target="_blank" rel="noopener" style="color:var(--accent)">茜犬 -Akane-</a>（CC0、赤山みんと）</p>
 </div></div>
 <div id="settings" class="modal"><div class="box"><h3>設定</h3><div id="settingsBody"></div></div></div>
@@ -271,7 +271,7 @@ function markDirty() {
   S.dirty = true;
   updateTitle();
 }
-function updateTitle() { document.title = `${D.name}${S.dirty ? ' *' : ''} - Motion Tool`; }
+function updateTitle() { document.title = `${D.name}${S.dirty ? ' *' : ''} - SisMotionTooL`; }
 window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 // ================================================================
@@ -3166,7 +3166,7 @@ async function saveToUnity(as) {
       res = await post(true);
     }
   } catch (e) {
-    setStatus('Unityとつながりません。UnityでTools/Motion Toolをもう一度選んでください', true);
+    setStatus('Unityとつながりません。UnityでTools/SisMotionTooLをもう一度選んでください', true);
     return;
   }
   if (!res.ok) { setStatus('保存できません: ' + res.message, true); return; }
@@ -3644,7 +3644,7 @@ function renderHelp() {
   add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shiftで足す、右クリックでつなぎ方');
   add('行', '名前で選ぶ、＋ かダブルクリックでキー、ホイールで縦、Shift+ホイールで横、Ctrl+ホイールで拡大');
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
-  $('helpNote').textContent = S.sample ? '保存すると、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '保存した.motion.jsonをUnityに置いて、右クリック → Motion Tool → .animにする';
+  $('helpNote').textContent = S.sample ? '保存すると、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '保存した.motion.jsonをUnityに置いて、右クリック → SisMotionTooL → .animにする';
 }
 
 window.addEventListener('keydown', e => {
@@ -3739,7 +3739,7 @@ async function filesFromUrls(urls) {
 }
 
 /**
- * UnityのTools/Motion Toolから開いたとき（アドレスに ?unity が付く）。Unityが立てたサーバーから、選んだアバターを受け取る。
+ * UnityのTools/SisMotionTooLから開いたとき（アドレスに ?unity が付く）。Unityが立てたサーバーから、選んだアバターを受け取る。
  * テクスチャは、Unityが「FBXのマテリアル名 → 画像」の対応を付けて渡す。
  */
 async function filesFromUnity() {
@@ -3777,7 +3777,7 @@ async function openFromUnity(man) {
 
 async function loadDefaultModel() {
   const say = text => { $('empty').firstElementChild.textContent = text; setStatus(text, true); };
-  if (!/^https?:$/.test(location.protocol)) { say('公開ページか、Unity の Tools/Motion Tool から開いてください'); return; }
+  if (!/^https?:$/.test(location.protocol)) { say('公開ページか、Unity の Tools/SisMotionTooL から開いてください'); return; }
   const unity = new URLSearchParams(location.search).has('unity') ? await filesFromUnity() : null;
   const files = unity ? unity.files : await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
   if (!files.some(f => /\.fbx$/i.test(f.name))) { say('モデルを読み込めませんでした'); return; }
