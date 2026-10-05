@@ -402,6 +402,148 @@ function applyBodyShapes(body) {
   if (M.shapeBase.size) goFrame(S.frame);
 }
 
+/**
+ * シーンのアバターの、FBX に無い見た目（衣装・髪・アクセ）を出す。Unity が書き出したメッシュをそのまま使う。
+ * 衣装の骨は、Unity が決めた素体の骨の子にする（揺らさず、その骨に付いてくる）。
+ * 骨の子にしてあるので、クリックで骨を選ぶ（boneAtHit）も衣装の上でそのまま効く。
+ */
+async function loadParts(parts) {
+  if (!M || !parts) return;
+  const hidden = hideSceneMeshes(parts.hide || []);
+  if (!parts.meshes?.length) return;
+  const fit = fitUnitySpace(parts);
+  if (!fit) { setStatus($('status').textContent + '  衣装などを合わせられません（素体の骨が見つからない）', true); return; }
+
+  // 衣装の骨: 素体の骨（元のポーズ）から見た位置で固定する
+  const saved = savePose();
+  applyRest();
+  const nodes = parts.nodes.map(nd => {
+    const bone = M.bones[(nd.driver ? M.byName.get(nd.driver) : null) ?? M.hips];
+    const o = new THREE.Object3D();
+    o.name = nd.name;
+    o.matrixAutoUpdate = false;
+    o.matrix.copy(bone.matrixWorld).invert().multiply(fit.W.clone().multiply(new THREE.Matrix4().fromArray(nd.m)));
+    bone.add(o);
+    return o;
+  });
+  restorePose(saved);
+
+  const flip = fit.W.determinant() < 0;
+  const textures = new Map();
+  const texture = url => {
+    if (!url) return null;
+    if (!textures.has(url)) {
+      const t = new THREE.TextureLoader().load(url);
+      t.colorSpace = THREE.SRGBColorSpace;
+      textures.set(url, t);
+    }
+    return textures.get(url);
+  };
+  const meshes = await Promise.all(parts.meshes.map(async pm => {
+    let buf;
+    try { const r = await fetch(pm.url); if (!r.ok) return null; buf = await r.arrayBuffer(); } catch (e) { return null; }
+    const n = pm.vertexCount;
+    let off = 0;
+    const take = (Type, count) => { const a = new Type(buf.slice(off, off + count * Type.BYTES_PER_ELEMENT)); off += count * Type.BYTES_PER_ELEMENT; return a; };
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(take(Float32Array, n * 3), 3));
+    if (pm.normals) g.setAttribute('normal', new THREE.BufferAttribute(take(Float32Array, n * 3), 3));
+    if (pm.uv) g.setAttribute('uv', new THREE.BufferAttribute(take(Float32Array, n * 2), 2));
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(take(Uint16Array, n * 4), 4));
+    g.setAttribute('skinWeight', new THREE.BufferAttribute(take(Float32Array, n * 4), 4));
+    const binds = take(Float32Array, pm.bones.length * 16);
+    const index = take(Uint32Array, pm.indexCount);
+    // 左右の反転を挟むと三角形の回り方が逆になる（そのままだと表と裏が入れ替わり、陰が逆に付く）
+    if (flip) for (let t = 0; t + 2 < index.length; t += 3) [index[t + 1], index[t + 2]] = [index[t + 2], index[t + 1]];
+    g.setIndex(new THREE.BufferAttribute(index, 1));
+    if (!pm.normals) g.computeVertexNormals();
+    const mats = pm.subs.map((s, k) => {
+      g.addGroup(s.start, s.count, k);
+      const map = texture(s.tex);
+      const c = s.color || [1, 1, 1, 1];
+      return new THREE.MeshToonMaterial({
+        name: pm.name, map, color: new THREE.Color().setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace),
+        alphaTest: map ? 0.4 : 0, side: THREE.DoubleSide,
+      });
+    });
+    const mesh = new THREE.SkinnedMesh(g, mats);
+    // Unity と同じく「骨のワールド × バインドポーズ」で動かす（メッシュ自体の置き場所は効かせない）
+    mesh.bind(new THREE.Skeleton(pm.bones.map(k => nodes[k]), pm.bones.map((_, j) => new THREE.Matrix4().fromArray(binds, j * 16))), new THREE.Matrix4());
+    mesh.name = pm.name;
+    mesh.userData.originalName = pm.name;
+    mesh.frustumCulled = false;
+    return mesh;
+  }));
+  const added = meshes.filter(Boolean);
+  for (const m of added) { M.root.add(m); M.meshes.push(m); }
+  M.root.updateMatrixWorld(true);
+  buildMeshList();
+  for (const m of hidden) m.visible = false;
+  refreshMeshList();
+  const lost = parts.meshes.length - added.length;
+  setStatus($('status').textContent + `  衣装など${added.length}個` + (lost ? `（${lost}個は読めません）` : '') +
+    (fit.err > M.size * 0.01 ? `  骨の合わせに${(fit.err / M.size * 100).toFixed(1)}%のずれ` : ''), lost > 0);
+}
+
+/** シーンで出ていない FBX のメッシュ（パスはモデルのルートから）を隠す。隠した物を返す */
+function hideSceneMeshes(paths) {
+  if (!paths.length) return [];
+  const want = new Set(paths);
+  const out = [];
+  for (const m of M.meshes) {
+    const path = [];
+    for (let o = m; o && o !== M.root; o = o.parent) path.unshift(o.userData.originalName ?? o.name);
+    if (want.has(path.join('/'))) { m.visible = false; out.push(m); }
+  }
+  if (out.length) refreshMeshList();
+  return out;
+}
+
+/**
+ * Unity の空間（モデルのルートから）→ ページのワールドの行列。素体の骨のシーンでの位置を、ページの元のポーズの位置に最小二乗で重ねる。
+ * 反転・単位・軸の違い（Z-up の FBX など）も、Armature ごとの拡大も、まとめてここに入る。err はいちばんずれた骨の距離。
+ */
+function fitUnitySpace(parts) {
+  const rows = [];
+  (parts.refNames || []).forEach((n, k) => {
+    const i = M.byName.get(n);
+    if (i != null) rows.push([parts.refPos[k * 3], parts.refPos[k * 3 + 1], parts.refPos[k * 3 + 2], M.restWP[i]]);
+  });
+  if (rows.length < 4) return null;
+  // (Σ u uᵀ) X = Σ u pᵀ、u = (x, y, z, 1)
+  const A = [0, 1, 2, 3].map(() => [0, 0, 0, 0]), B = [0, 1, 2, 3].map(() => [0, 0, 0]);
+  for (const [x, y, z, p] of rows) {
+    const u = [x, y, z, 1];
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) A[r][c] += u[r] * u[c];
+      B[r][0] += u[r] * p.x; B[r][1] += u[r] * p.y; B[r][2] += u[r] * p.z;
+    }
+  }
+  // ガウスの消去法（部分ピボット）
+  for (let c = 0; c < 4; c++) {
+    let piv = c;
+    for (let r = c + 1; r < 4; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    if (Math.abs(A[piv][c]) < 1e-12) return null;
+    [A[c], A[piv]] = [A[piv], A[c]];
+    [B[c], B[piv]] = [B[piv], B[c]];
+    for (let r = 0; r < 4; r++) {
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < 4; k++) A[r][k] -= f * A[c][k];
+      for (let k = 0; k < 3; k++) B[r][k] -= f * B[c][k];
+    }
+  }
+  const X = B.map((row, r) => row.map(v => v / A[r][r]));
+  const W = new THREE.Matrix4().set(
+    X[0][0], X[1][0], X[2][0], X[3][0],
+    X[0][1], X[1][1], X[2][1], X[3][1],
+    X[0][2], X[1][2], X[2][2], X[3][2],
+    0, 0, 0, 1);
+  let err = 0;
+  for (const [x, y, z, p] of rows) err = Math.max(err, new THREE.Vector3(x, y, z).applyMatrix4(W).distanceTo(p));
+  return { W, err, count: rows.length };
+}
+
 /** FBX の GlobalSettings の軸（UpAxis など）。バイナリとテキストの両方。無ければ Y-up・+Z 前・+X。 */
 function readAxes(buffer) {
   const names = ['UpAxis', 'UpAxisSign', 'FrontAxis', 'FrontAxisSign', 'CoordAxis', 'CoordAxisSign'];
@@ -4507,13 +4649,15 @@ async function filesFromUnity() {
   const texs = man.textures || [];
   let body = null;
   if (man.body) { try { const r = await fetch(man.body); if (r.ok) body = await r.json(); } catch (e) { body = null; } }
+  let parts = null;
+  if (man.parts) { try { const r = await fetch(man.parts); if (r.ok) parts = await r.json(); } catch (e) { parts = null; } }
   const [fbx, info, ...images] = await Promise.all([
     get(man.fbx, man.model), get(man.info, man.model + '.motiontool.json'), ...texs.map(t => get(t.url, t.file)),
   ]);
   if (!fbx) return null;
   const texByMat = new Map();
   texs.forEach((t, i) => { if (images[i]) texByMat.set(t.material.toLowerCase(), images[i]); });
-  return { files: [fbx, info, ...images].filter(Boolean), texByMat, man, body };
+  return { files: [fbx, info, ...images].filter(Boolean), texByMat, man, body, parts };
 }
 
 /** Unityで.animを選んで開いたとき。Unityが覚えていた編集用のデータか、無ければ.animから起こしたポーズが来る。 */
@@ -4540,6 +4684,7 @@ async function loadDefaultModel() {
   const files = unity ? unity.files : await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
   if (!files.some(f => /\.fbx$/i.test(f.name))) { say('モデルを読み込めませんでした'); return; }
   await loadModelFiles(files, unity ? unity.texByMat : null, unity ? unity.body : null);
+  if (unity?.parts) await loadParts(unity.parts);
   if (unity) await openFromUnity(unity.man);
   // Unity を通さないページは、茜犬の見本（モデルの数値が入っているので、ブラウザだけで .anim を書ける）
   else if (M?.muscleInfo) { S.sample = true; }
@@ -4554,7 +4699,7 @@ loadDefaultModel();
 // 確認用（コンソールから触る）
 window.MT = {
   THREE, D, S, get M() { return M; }, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
-  mirrorPose, copyPose, pastePose, select, undo, redo, pick, newDoc, keyAll, projectData, applyProject, allKeyFrames, constrainBone, camera, gizmo,
+  mirrorPose, copyPose, pastePose, select, undo, redo, pick, boneAtHit, newDoc, keyAll, projectData, applyProject, allKeyFrames, constrainBone, camera, gizmo,
   applyUnityView, restoreUnityView, analyzeLimb, orbit, get settings() { return CFG; },
   TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY, buildAnim, buildAnimModel, animFrame,
   /** ワールドの位置 → 画面（クライアント座標）。 */
