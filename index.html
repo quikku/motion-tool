@@ -134,6 +134,8 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bAuto" title="動かし終えたらキーを打つ">自動キー</button>
     <button id="bSym" title="左右の骨を一緒に動かす">対称</button>
     <button id="bLimit" title="首や手首などを回しすぎないようにする">上限</button>
+    <button id="bFalloff" title="キーを打つとき、前後のキーにも同じ動きを少しずつ足す（離れるほど弱く）">伝染</button>
+    <input id="falloffR" type="number" min="1" step="1" style="width:44px" title="伝染させる範囲（前後のフレーム数）">
     <span class="sep"></span>
     <button id="bPose">ポーズ ▾</button>
     <button id="bBones" title="骨の表示">骨: 人型</button>
@@ -281,7 +283,7 @@ const S = {
   /** 茜犬の見本（Unityを通さずに .anim を書く）。Unity から開いたときは unity、どちらでもなければ（file:// など）モデルを出さない。 */
   sample: false, animHandle: null,
   frame: 0, playing: false, playT: 0, sel: null, edited: new Set(), shapeEdited: new Set(), shapeSel: null, tab: 'bones',
-  autoKey: true, ik: true, pin: false, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
+  autoKey: true, ik: true, pin: false, falloff: false, falloffR: 10, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
   dirty: false,
 };
 
@@ -1197,6 +1199,7 @@ function setKey(i, f) {
 
 function keyBones(list, shapes = []) {
   if (!M || (!list.length && !shapes.length)) return;
+  if (S.falloff) for (const i of list) spreadToNeighbors(i, S.frame);
   for (const i of list) setKey(i, S.frame);
   for (const i of list) S.edited.delete(i);
   for (const id of shapes) {
@@ -1208,6 +1211,40 @@ function keyBones(list, shapes = []) {
   refreshKeysUI();
 }
 const keyShapes = ids => keyBones([], ids);
+
+/** 「伝染」の重み。frame から d フレーム離れたキーにどれだけ効かせるか（Blender の Smooth と同じ減り方） */
+function falloffWeight(d) {
+  const R = S.falloffR;
+  if (d >= R) return 0;
+  const u = 1 - d / R;
+  return u * u * (3 - 2 * u);
+}
+
+/**
+ * 「伝染」: 骨 i をフレーム f で動かした分（いまの姿 − カーブの値）を、同じ骨の前後のキーにも重みを付けて足す。
+ * キーを打つ前に呼ぶ。新しいキーは足さず、既にあるキーだけを動かす（間のフレームはそのキーから補間されてついてくる）。
+ * 回転は親の空間での差分を足す。ループのときは、つなぎ目の向こう側のキーも近いとみなす。
+ */
+function spreadToNeighbors(i, f) {
+  const t = D.tracks.get(i);
+  if (!t || !t.keys.some(k => k.f !== f)) return;
+  const b = M.bones[i];
+  const oldQ = new THREE.Quaternion(), oldP = b.position.clone();
+  const hadPos = evalTrack(t, M.restQ[i], f, oldQ, oldP, M.lowerView?.get(i));
+  const dq = b.quaternion.clone().multiply(oldQ.invert());
+  const dp = hadPos ? b.position.clone().sub(oldP) : null;
+  if (1 - Math.abs(dq.w) < 1e-10 && (!dp || dp.lengthSq() < 1e-14)) return;
+  const I = new THREE.Quaternion(), last = D.frameCount;
+  for (const k of t.keys) {
+    if (k.f === f || k.f < 0 || k.f > last) continue;
+    let d = Math.abs(k.f - f);
+    if (D.loop) d = Math.min(d, last - d);
+    const w = falloffWeight(d);
+    if (w <= 0) continue;
+    k.q = I.clone().slerp(dq, w).multiply(k.q).normalize();
+    if (dp && k.p) k.p = k.p.clone().addScaledVector(dp, w);
+  }
+}
 
 /**
  * 実際にカーブにするキー列。0 と最終フレームに前後のキーの値を置く。
@@ -2168,6 +2205,19 @@ function drawTimeline() {
       if (x > TL.left) { g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + TL.rowH); g.stroke(); }
     }
     g.save(); g.beginPath(); g.rect(TL.left, y, w - TL.left, TL.rowH); g.clip();
+    // 「伝染」の効く範囲
+    if (S.falloff) {
+      const a = Math.round(fx(S.frame - S.falloffR)) + 0.5, z = Math.round(fx(S.frame + S.falloffR)) + 0.5;
+      g.fillStyle = 'rgba(255,170,60,.08)';
+      g.fillRect(a, y, z - a, TL.rowH);
+      // 枠: 左右の端は行ごとに引いてつなげ、上下は一番上と一番下の行だけ
+      g.strokeStyle = 'rgba(255,170,60,.7)';
+      g.beginPath();
+      g.moveTo(a, y); g.lineTo(a, y + TL.rowH); g.moveTo(z, y); g.lineTo(z, y + TL.rowH);
+      if (r === 0) { g.moveTo(a, y + 0.5); g.lineTo(z, y + 0.5); }
+      if (r === TL.rows.length - 1) { g.moveTo(a, y + TL.rowH - 0.5); g.lineTo(z, y + TL.rowH - 0.5); }
+      g.stroke();
+    }
     for (const f of rowKeys(row)) {
       const sel = TL.sel.has(`${row.ref}:${f}`) || (r > 0 && TL.sel.has(`all:${f}`));
       const x = fx(f + (sel ? drag : 0));
@@ -2804,6 +2854,8 @@ function updateButtons() {
   $('bAuto').classList.toggle('on', S.autoKey);
   $('bSym').classList.toggle('on', !!S.sym);
   $('bLimit').classList.toggle('on', S.limits !== false);
+  $('bFalloff').classList.toggle('on', S.falloff);
+  $('falloffR').disabled = !S.falloff;
   $('bOnion').classList.toggle('on', S.onion);
   $('bBones').textContent = '骨: ' + { human: '人型', all: 'すべて', none: 'なし' }[S.boneView];
   $('bPlay').textContent = S.playing ? '■' : '▶';
@@ -3481,6 +3533,9 @@ $('bIK').onclick = () => {
   updateButtons();
 };
 $('bPin').onclick = () => { S.pin = !S.pin; updateButtons(); };
+$('bFalloff').onclick = () => { S.falloff = !S.falloff; updateButtons(); drawTimeline(); };
+$('falloffR').value = S.falloffR;
+$('falloffR').onchange = e => { S.falloffR = Math.max(1, Math.round(Number(e.target.value)) || 10); e.target.value = S.falloffR; drawTimeline(); };
 $('bAuto').onclick = () => { S.autoKey = !S.autoKey; updateButtons(); };
 $('bOnion').onclick = () => { S.onion = !S.onion; updateOnion(); updateButtons(); };
 $('bBones').onclick = () => { S.boneView = { human: 'all', all: 'none', none: 'human' }[S.boneView]; updateOnion(); updateButtons(); refreshBoneListVisibility(); };
@@ -3560,7 +3615,7 @@ const ACTIONS = [
   ['undo', '取り消し', 'Ctrl+KeyZ'], ['redo', 'やり直し', 'Ctrl+KeyY'],
   ['copy', 'コピー', 'Ctrl+KeyC'], ['paste', '貼り付け', 'Ctrl+KeyV'], ['pasteMirror', '反転して貼り付け', 'Ctrl+Shift+KeyV'],
   ['save', '保存', 'Ctrl+KeyS'], ['saveAs', '別名で保存', 'Ctrl+Shift+KeyS'],
-  ['ik', 'IKの入 / 切', ''], ['pin', '固定の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
+  ['ik', 'IKの入 / 切', ''], ['pin', '固定の入 / 切', ''], ['falloff', '伝染の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
   ['onion', 'オニオンの入 / 切', ''], ['boneView', '骨の表示を切り替え', ''],
   ['mirrorAll', '全身を反転', ''], ['mirrorSel', '選んだ骨を反対側へ', ''],
 ];
@@ -3571,7 +3626,7 @@ const RUN = {
   play: () => $('bPlay').click(), focus: () => focusSelected(), deselect: () => { TL.sel.clear(); select(null); },
   undo: () => undo(), redo: () => redo(), copy: () => (TL.sel.size ? copyKeys() : copyPose()), paste: () => (lastCopy === 'keys' ? pasteKeys() : pastePose(false)), pasteMirror: () => pastePose(true),
   save: () => save(false), saveAs: () => save(true),
-  ik: () => $('bIK').click(), pin: () => $('bPin').click(), autoKey: () => $('bAuto').click(),
+  ik: () => $('bIK').click(), pin: () => $('bPin').click(), falloff: () => $('bFalloff').click(), autoKey: () => $('bAuto').click(),
   onion: () => $('bOnion').click(), boneView: () => $('bBones').click(),
   mirrorAll: () => mirrorPose('all'), mirrorSel: () => mirrorPose('sel'),
 };
