@@ -135,7 +135,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bSym" title="左右の骨を一緒に動かす">対称</button>
     <button id="bLimit" title="首や手首などを回しすぎないようにする">上限</button>
     <button id="bFalloff" title="キーを打つとき、前後のキーにも同じ動きを少しずつ足す（離れるほど弱く）">伝染</button>
-    <input id="falloffR" type="number" min="1" step="1" style="width:44px" title="伝染させる範囲（前後のフレーム数）">
+    <input id="falloffR" type="number" min="1" step="1" style="width:44px" title="伝染させる範囲（前後のフレーム数）。左右にドラッグかホイールで増減、クリックで打ち込み。Shiftで5ずつ">
     <span class="sep"></span>
     <button id="bPose">ポーズ ▾</button>
     <button id="bBones" title="骨の表示">骨: 人型</button>
@@ -3534,8 +3534,46 @@ $('bIK').onclick = () => {
 };
 $('bPin').onclick = () => { S.pin = !S.pin; updateButtons(); };
 $('bFalloff').onclick = () => { S.falloff = !S.falloff; updateButtons(); drawTimeline(); };
+const setFalloffR = v => { S.falloffR = Math.max(1, Math.round(v) || 10); $('falloffR').value = S.falloffR; drawTimeline(); };
 $('falloffR').value = S.falloffR;
-$('falloffR').onchange = e => { S.falloffR = Math.max(1, Math.round(Number(e.target.value)) || 10); e.target.value = S.falloffR; drawTimeline(); };
+$('falloffR').onchange = e => setFalloffR(Number(e.target.value));
+scrubNumber($('falloffR'), () => S.falloffR, setFalloffR);
+
+/**
+ * 数字の欄を、左右のドラッグ（右で増える）とホイール（上で増える）でも変えられるようにする。
+ * 動かさずに離したときだけ、ふつうの欄として打ち込める。Shift を押すと 5 ずつ。
+ */
+function scrubNumber(el, get, set) {
+  const PX = 6; // 1 増やすのに動かす量
+  el.style.cursor = 'ew-resize';
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || document.activeElement === el) return; // 打ち込み中はふつうの欄
+    e.preventDefault();
+    const x0 = e.clientX, v0 = get();
+    let moved = false;
+    el.setPointerCapture(e.pointerId);
+    const move = ev => {
+      const dx = ev.clientX - x0;
+      if (!moved && Math.abs(dx) < 3) return;
+      moved = true;
+      set(v0 + Math.trunc(dx / PX) * (ev.shiftKey ? 5 : 1));
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (!moved) { el.focus(); el.select(); }
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  });
+  el.addEventListener('wheel', e => {
+    if (el.disabled) return;
+    e.preventDefault();
+    set(get() + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 5 : 1));
+  }, { passive: false });
+}
 $('bAuto').onclick = () => { S.autoKey = !S.autoKey; updateButtons(); };
 $('bOnion').onclick = () => { S.onion = !S.onion; updateOnion(); updateButtons(); };
 $('bBones').onclick = () => { S.boneView = { human: 'all', all: 'none', none: 'human' }[S.boneView]; updateOnion(); updateButtons(); refreshBoneListVisibility(); };
