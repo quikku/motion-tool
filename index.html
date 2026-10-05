@@ -1789,8 +1789,24 @@ function updateOnion() {
 
 const raycaster = new THREE.Raycaster();
 let press = null;
+/**
+ * ギズモより先に見る（capture）。押した所に骨の点・IK の的があれば、ギズモを休ませてクリックで選べるようにする。
+ * 回転のギズモは輪の内側全体が「自由に回す」の当たりなので、そのままだと内側の骨が選べない。
+ * 今選んでいる物そのものの上なら、今まで通りギズモで回す。
+ */
 renderer.domElement.addEventListener('pointerdown', e => {
-  press = { x: e.clientX, y: e.clientY, gizmo: gizmo.axis !== null, button: e.button };
+  if (e.button !== 0 || !M || S.playing || !gizmo.object) return;
+  const r = renderer.domElement.getBoundingClientRect();
+  const hit = markerAt(e.clientX - r.left, e.clientY - r.top);
+  if (!hit || sameSel(hit, S.sel)) return;
+  gizmo.enabled = false;
+  const back = () => { gizmo.enabled = true; window.removeEventListener('pointerup', back); window.removeEventListener('pointercancel', back); };
+  window.addEventListener('pointerup', back);
+  window.addEventListener('pointercancel', back);
+}, { capture: true });
+renderer.domElement.addEventListener('pointerdown', e => {
+  // 輪の内側（自由に回す）を動かさずに離したときは、回したことにせず下の物を選ぶ
+  press = { x: e.clientX, y: e.clientY, gizmo: gizmo.enabled && gizmo.axis !== null && gizmo.axis !== 'XYZE', button: e.button };
 });
 renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 renderer.domElement.addEventListener('pointerup', e => {
@@ -1810,7 +1826,10 @@ function screenOf(p, r) {
   return { x: (_v.x + 1) / 2 * r.width, y: (1 - _v.y) / 2 * r.height, z: _v.z };
 }
 
-function pick(x, y) {
+const sameSel = (a, b) => !!a && !!b && a.kind === b.kind && a.i === b.i && a.limb === b.limb;
+
+/** 画面の (x, y) の近くにある骨の点・IK の的（無ければ null） */
+function markerAt(x, y) {
   const r = renderer.domElement.getBoundingClientRect();
   let best = null;
   const tryHit = (p, sel, radius) => {
@@ -1823,7 +1842,13 @@ function pick(x, y) {
   if (S.ik && M.human.Head != null) tryHit(LOOK.target.position, { kind: 'look' }, 10);
   if (M.rootBone >= 0 && S.boneView !== 'none') tryHit(wp(M.bones[M.rootBone]), { kind: 'bone', i: M.rootBone }, 10);
   if (!best) for (const i of MK.list) tryHit(wp(M.bones[i]), { kind: 'bone', i }, 9);
-  if (best) { select(best.sel); return; }
+  return best ? best.sel : null;
+}
+
+function pick(x, y) {
+  const r = renderer.domElement.getBoundingClientRect();
+  const hit = markerAt(x, y);
+  if (hit) { select(hit); return; }
 
   // 体をクリック: その点をいちばん動かしている骨
   raycaster.setFromCamera(new THREE.Vector2(x / r.width * 2 - 1, -(y / r.height) * 2 + 1), camera);
