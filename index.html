@@ -12,13 +12,13 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
   font: 12px/1.4 system-ui, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif; user-select: none; }
-#app { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 240px 1fr; height: 100vh; }
-#toolbar { grid-column: 1 / 3; display: flex; gap: 4px; align-items: center; padding: 4px 6px;
+#app { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 240px 1fr auto; height: 100vh; }
+#toolbar { grid-column: 1 / -1; display: flex; gap: 4px; align-items: center; padding: 4px 6px;
   background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 #side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 #view { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 #view canvas { display: block; width: 100%; height: 100%; outline: none; }
-#timeline { grid-column: 1 / 3; background: var(--panel); border-top: 1px solid var(--line); }
+#timeline { grid-column: 1 / -1; background: var(--panel); border-top: 1px solid var(--line); }
 button, select, input { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
   border-radius: 3px; padding: 2px 7px; height: 23px; }
 button { cursor: pointer; }
@@ -98,6 +98,18 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 #settings .note { color: var(--dim); margin: 2px 0 0; }
 #help td { padding: 2px 10px 2px 0; vertical-align: top; }
 #help td:first-child { color: var(--key); white-space: nowrap; }
+#vpane { flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--line); position: relative; }
+#vresize { position: absolute; left: -4px; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 5; }
+#vresize:hover { background: var(--accent); }
+#vpane .vbar { display: flex; gap: 4px; align-items: center; padding: 4px 6px; }
+#vName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+#vbox { flex: 1; min-height: 0; position: relative; background: #000; }
+#vid, #vimg { width: 100%; height: 100%; object-fit: contain; display: block; }
+#vEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); pointer-events: none; }
+#vSeek { flex: 1; min-width: 60px; padding: 0; height: 16px; accent-color: var(--accent); background: none; border: 0; }
+#vTime { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pop { position: fixed; display: none; gap: 5px; align-items: center; background: var(--panel2); border: 1px solid #50545c; border-radius: 4px;
+  padding: 6px 8px; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.4); white-space: nowrap; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -120,10 +132,14 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bIK" title="手先・足先をIKで動かす">IK</button>
     <button id="bPin" title="体を動かしても、IKの手先・足先をその場に残す">固定</button>
     <button id="bAuto" title="動かし終えたらキーを打つ">自動キー</button>
+    <button id="bSym" title="左右の骨を一緒に動かす">対称</button>
+    <button id="bLimit" title="首や手首などを回しすぎないようにする">上限</button>
     <span class="sep"></span>
     <button id="bPose">ポーズ ▾</button>
     <button id="bBones" title="骨の表示">骨: 人型</button>
     <button id="bOnion" title="前後のキーの骨を重ねる">オニオン</button>
+    <button id="bBreath">呼吸</button>
+    <button id="bVideo">動画</button>
     <button id="bSettings" title="マウスとキーの割り当て">設定</button>
     <button id="bHelp">?</button>
     <span id="status"></span>
@@ -137,6 +153,14 @@ label { display: inline-flex; align-items: center; color: var(--text); }
   </div>
   <div id="view">
     <div id="empty"><div>読み込み中</div></div>
+  </div>
+  <div id="vpane" style="display:none">
+    <div id="vresize"></div>
+    <div class="vbar"><button id="vOpen">開く</button><span id="vName"></span><button id="vMirror" title="左右反転">反転</button><button id="vMute">音なし</button></div>
+    <div id="vbox"><video id="vid" playsinline muted preload="auto"></video><img id="vimg" alt="" style="display:none"><div id="vEmpty">動画か画像をここに置く</div></div>
+    <div class="vbar vvid"><button id="vBack" title="動画を1フレーム前へずらす">-1</button><input id="vSeek" type="range" min="0" max="0" step="0.001" title="今のフレームに合わせる動画の位置"><button id="vFwd" title="動画を1フレーム後ろへずらす">+1</button><span id="vTime"></span></div>
+    <div class="vbar vvid"><span>0Fの位置</span><input id="vStart" type="number" step="0.01" style="width:64px" title="0フレームのときの動画の時刻（秒）"><span>秒</span><button id="vZero" title="今の動画の位置を0フレームにする">ここを0F</button></div>
+    <input id="vFile" type="file" accept="video/*,image/*" hidden>
   </div>
   <div id="timeline">
     <div id="tlresize"></div>
@@ -165,6 +189,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
   </div>
 </div>
 <div id="ctx" class="menu"></div>
+<div id="breathPop" class="pop"><label><input id="brOn" type="checkbox">入れる</label><span>周期</span><input id="brPeriod" type="number" min="0.5" max="60" step="0.5"><span>秒</span><span>強さ</span><input id="brAmp" type="number" min="0" max="500" step="10"><span>%</span><span id="brNote" style="color:var(--dim)"></span></div>
 <div id="ask" class="modal"><div class="box"><h3></h3><input type="text" spellcheck="false"><div class="row"><button class="no">やめる</button><button class="ok">OK</button></div></div></div>
 <div id="help" class="modal"><div class="box">
   <h3>操作</h3>
@@ -248,7 +273,7 @@ const mirrorV = v => new THREE.Vector3(-v.x, v.y, v.z);
 // ================================================================
 
 let M = null; // モデル
-const D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map() };
+const D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } };
 let docVer = 0;
 const S = {
   /** Unityから開いたとき: { path: 保存先の.anim（まだ無ければnull）, dir: 保存先の候補のフォルダ }。 */
@@ -700,7 +725,7 @@ function syncLimb(L) {
   L.pole.position.copy(defaultPole(L));
   L.pole.updateMatrixWorld(true);
 }
-function syncLimbs(except) { if (M) for (const L of M.limbs) if (L !== except) syncLimb(L); }
+function syncLimbs(except) { if (M) { for (const L of M.limbs) if (L !== except) syncLimb(L); syncLook(); } }
 
 function defaultPole(L) {
   const a = wp(M.bones[L.a]), b = wp(M.bones[L.b]), c = wp(M.bones[L.c]);
@@ -1118,7 +1143,7 @@ function hingeAngle(delta, axis, hinge) {
  * 骨のローカルの回転を、その骨の自由度に収める。変えたら true。
  * swing: 骨の軸まわりのねじりを除く / hinge: ヒンジまわりの曲げだけ / hingeTwist: 曲げ＋骨の軸まわりのねじり（反る向きは少しだけ）
  */
-function constrainBone(i) {
+function constrainDof(i) {
   const d = M.dof?.get(i);
   if (!d) return false;
   const b = M.bones[i];
@@ -1384,8 +1409,8 @@ function evalShape(t, f) {
   return hermite(u, dt, y[i], m[i], y[i + 1], m[i + 1]);
 }
 
-/** 骨とシェイプをキーのとおりにする（キーの無いものは元のまま）。 */
-function poseAt(f) {
+/** 骨とシェイプをキーのとおりにする（キーの無いものは元のまま）。breath: 呼吸の揺れも足す（再生と保存だけ） */
+function poseAt(f, breath = false) {
   for (let i = 0; i < M.bones.length; i++) {
     const b = M.bones[i], t = D.tracks.get(i);
     if (t && t.keys.length) {
@@ -1400,6 +1425,7 @@ function poseAt(f) {
     s.mesh.morphTargetInfluences[s.idx] = t && t.keys.length ? evalShape(t, f) / 100 : 0;
   }
   M.root.updateMatrixWorld(true);
+  if (breath) applyBreath(f);
 }
 
 function applyRest() {
@@ -1427,6 +1453,7 @@ function goFrame(f) {
   syncLimbs();
   updateOnion();
   refreshKeysUI();
+  videoFollow();
 }
 
 function allKeyFrames() {
@@ -1512,6 +1539,9 @@ function attachGizmo() {
   } else if (S.sel.kind === 'pole') {
     gizmo.setMode('translate');
     gizmo.attach(M.limbs[S.sel.limb].pole);
+  } else if (S.sel.kind === 'look') {
+    gizmo.setMode('translate');
+    gizmo.attach(LOOK.target);
   }
   // ルートはいつもワールドの向きで動かす（ルートのローカルの軸はFBXのArmatureの軸で、寝ていることがある）
   gizmo.setSpace(S.sel.kind === 'bone' && S.sel.i === M.rootBone ? 'world' : S.space);
@@ -1520,6 +1550,7 @@ function attachGizmo() {
 function selectedBone() {
   if (!S.sel || !M) return -1;
   if (S.sel.kind === 'bone') return S.sel.i;
+  if (S.sel.kind === 'look') return M.human.Head ?? -1;
   return M.limbs[S.sel.limb]?.c ?? -1;
 }
 
@@ -1531,6 +1562,8 @@ gizmo.addEventListener('objectChange', () => {
     S.edited.add(i);
     constrainBone(i);
     M.bones[i].updateMatrixWorld(true);
+    mirrorBoneEdit(i);
+    syncLook();
     const own = limbOfBone(i);
     for (const L of M.limbs) {
       if (L === own) continue;
@@ -1538,8 +1571,11 @@ gizmo.addEventListener('objectChange', () => {
       else syncLimb(L);
     }
     if (own) syncLimb(own);
+  } else if (S.sel.kind === 'look') {
+    solveLook();
   } else {
     solveLimb(M.limbs[S.sel.limb]);
+    mirrorLimbEdit(M.limbs[S.sel.limb]);
   }
   updateUnkeyed();
 });
@@ -1589,8 +1625,8 @@ function buildMarkers() {
   const n = M.bones.length;
   MK.points = mkPoints(n, 11, circleTex);
   MK.lines = mkLines(n, 0xc8d0e0, 0.45);
-  MK.handles = mkPoints(9, 13, null);
-  MK.poleLines = mkLines(4, 0x9fd0ff, 0.5);
+  MK.handles = mkPoints(10, 13, null);
+  MK.poleLines = mkLines(5, 0x9fd0ff, 0.5);
   for (const k of ['prev', 'next']) {
     if (onion[k]) { scene.remove(onion[k]); onion[k].geometry.dispose(); }
     onion[k] = mkLines(n, k === 'prev' ? 0xff5a4f : 0x5fd06a, 0.8);
@@ -1646,6 +1682,16 @@ function updateMarkers() {
       plp.setXYZ(pl++, _v.x, _v.y, _v.z);
       plp.setXYZ(pl++, L.pole.position.x, L.pole.position.y, L.pole.position.z);
     });
+    // 桃色 = 頭の向きの的
+    if (M.human.Head != null) {
+      const k = MK.hlist.length;
+      hp.setXYZ(k, LOOK.target.position.x, LOOK.target.position.y, LOOK.target.position.z);
+      hc.setXYZ(k, ...(S.sel?.kind === 'look' ? [1, 0.54, 0.24] : [0.95, 0.6, 0.9]));
+      MK.hlist.push({ kind: 'look' });
+      const e = eyePos();
+      plp.setXYZ(pl++, e.x, e.y, e.z);
+      plp.setXYZ(pl++, LOOK.target.position.x, LOOK.target.position.y, LOOK.target.position.z);
+    }
   }
   // 緑の四角 = ルート
   if (M.rootBone >= 0 && S.boneView !== 'none') {
@@ -1731,6 +1777,7 @@ function pick(x, y) {
     if (d <= radius && (!best || d < best.d)) best = { d, sel };
   };
   if (S.ik) M.limbs.forEach((L, li) => { tryHit(L.target.position, { kind: 'ik', limb: li }, 10); tryHit(L.pole.position, { kind: 'pole', limb: li }, 9); });
+  if (S.ik && M.human.Head != null) tryHit(LOOK.target.position, { kind: 'look' }, 10);
   if (M.rootBone >= 0 && S.boneView !== 'none') tryHit(wp(M.bones[M.rootBone]), { kind: 'bone', i: M.rootBone }, 10);
   if (!best) for (const i of MK.list) tryHit(wp(M.bones[i]), { kind: 'bone', i }, 9);
   if (best) { select(best.sel); return; }
@@ -1928,6 +1975,7 @@ function keySelected() {
   const i = selectedBone();
   let bones = [...S.edited];
   if (S.sel?.kind === 'ik' || S.sel?.kind === 'pole') { const L = M.limbs[S.sel.limb]; bones.push(L.a, L.b, L.c); }
+  else if (S.sel?.kind === 'look') bones.push(...[M.human.Neck, M.human.Head].filter(b => b != null));
   else if (i >= 0 && S.tab === 'bones') bones.push(i);
   bones = [...new Set(bones)];
   if (!bones.length && !shapes.length) { setStatus('骨かシェイプを選んでください'); return; }
@@ -2754,9 +2802,12 @@ function updateButtons() {
   $('bPin').classList.toggle('on', S.pin);
   $('bPin').disabled = !S.ik;
   $('bAuto').classList.toggle('on', S.autoKey);
+  $('bSym').classList.toggle('on', !!S.sym);
+  $('bLimit').classList.toggle('on', S.limits !== false);
   $('bOnion').classList.toggle('on', S.onion);
   $('bBones').textContent = '骨: ' + { human: '人型', all: 'すべて', none: 'なし' }[S.boneView];
   $('bPlay').textContent = S.playing ? '■' : '▶';
+  $('bBreath').classList.toggle('on', D.breath.on);
 }
 
 // ================================================================
@@ -2769,9 +2820,11 @@ function startPlay() {
   S.playT = S.frame;
   gizmo.detach();
   updateButtons();
+  videoPlay();
 }
 function stopPlay() {
   S.playing = false;
+  videoPause();
   updateButtons();
   goFrame(Math.floor(S.playT));
   attachGizmo();
@@ -2801,12 +2854,15 @@ function buildFile() {
   const real = new Set(allKeyFrames());
   const frames = new Set(tracked.length ? [0, D.frameCount] : []);
   for (const i of tracked) curveFrames(prepTrack(D.tracks.get(i), M.restQ[i], M.lowerView?.get(i)).ks, frames);
+  // 呼吸の揺れはキーの外なので、その骨も毎フレーム書く
+  const breathing = tracked.length ? breathBones() : [];
+  if (breathing.length) for (let f = 0; f <= D.frameCount; f++) frames.add(f);
   const startMode = startInterp();
   // ルートは骨として書かない（FBXに無い）。ルートの動きは、腰のワールドの向きと位置に入って出ていく
-  const written = tracked.filter(i => i !== M.rootBone);
-  if (written.length < tracked.length && !written.includes(M.hips)) { written.push(M.hips); written.sort((a, b) => a - b); }
+  const written = [...new Set([...tracked, ...breathing])].sort((a, b) => a - b).filter(i => i !== M.rootBone);
+  if (tracked.includes(M.rootBone) && !written.includes(M.hips)) { written.push(M.hips); written.sort((a, b) => a - b); }
   const poses = [...frames].sort((a, b) => a - b).map(f => {
-    poseAt(f);
+    poseAt(f, true);
     const rot = new Array(written.length * 4);
     const put = k => { const d = deltaOf(written[k]); rot[k * 4] = r6(d.x); rot[k * 4 + 1] = r6(d.y); rot[k * 4 + 2] = r6(d.z); rot[k * 4 + 3] = r6(d.w); };
     written.forEach((i, k) => { if (M.humanSet.has(i) || i === M.hips) put(k); });
@@ -2853,6 +2909,7 @@ function buildFile() {
     tracks: tracked.map(i => ({ bone: M.names[i], keys: D.tracks.get(i).keys.map(k => ({ f: k.f, q: k.q.toArray().map(r6), ...(k.p ? { p: k.p.toArray().map(r6) } : {}) })) })),
     shapes: shapeKeys,
     interp: [...D.interp].filter(([f]) => real.has(f)),
+    breath: { ...D.breath },
   };
 }
 
@@ -3119,7 +3176,7 @@ function buildAnim(name) {
   let prev = null; const prevE = new Map();
   try {
     for (let f = 0; f < count; f++) {
-      poseAt(f);
+      poseAt(f, true);
       const view = applyUnityView();
       const r = animFrame(am, prev);
       restoreUnityView(view);
@@ -3265,6 +3322,7 @@ function applyMotionJson(obj, fileName) {
   D.fps = obj.fps || 30;
   D.frameCount = Math.max(1, obj.frameCount || 60);
   D.loop = !!obj.loop;
+  D.breath = { on: false, period: 4, amp: 100, ...(obj.breath || {}) };
   D.name = clipNameOf(fileName);
   D.tracks.clear();
   D.shapes.clear();
@@ -3418,7 +3476,7 @@ $('bRot').onclick = () => setMode('rotate');
 $('bSpace').onclick = () => { S.space = S.space === 'local' ? 'world' : 'local'; gizmo.setSpace(S.space); updateButtons(); };
 $('bIK').onclick = () => {
   S.ik = !S.ik;
-  if (!S.ik && S.sel && S.sel.kind !== 'bone') select({ kind: 'bone', i: M.limbs[S.sel.limb].c });
+  if (!S.ik && S.sel && S.sel.kind !== 'bone') select({ kind: 'bone', i: S.sel.kind === 'look' ? M.human.Head : M.limbs[S.sel.limb].c });
   syncLimbs();
   updateButtons();
 };
@@ -3718,6 +3776,358 @@ window.addEventListener('keydown', e => {
 applySettings();
 
 // ================================================================
+//  個人用: 呼吸・動画（personal ブランチだけ。公開しない）
+// ================================================================
+
+const loadLocal = (key, def) => { try { return { ...def, ...JSON.parse(localStorage.getItem(key) || '{}') }; } catch (e) { return { ...def }; } };
+const saveLocal = (key, v) => { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* 覚えられなくてもいい */ } };
+
+// ---------- 呼吸（キーの上に足す揺れ。再生と保存のときだけ） ----------
+
+/** 吸い切りと吐き切りの差（度、強さ 100% のとき）。首と頭は胸の分を戻して、顔の向きを変えない */
+const BREATH_DEG = { Spine: 0.6, Chest: 1.2, UpperChest: 1.2, Shoulder: 2.5 };
+
+function breathBones() {
+  if (!M || !D.breath.on || !(D.breath.amp > 0)) return [];
+  return ['Spine', 'Chest', 'UpperChest', 'Neck', 'Head', 'LeftShoulder', 'RightShoulder'].map(n => M.human[n]).filter(i => i != null);
+}
+/** 1 回の呼吸のフレーム数。ループのときは、ループの長さにちょうど整数回入るようにする */
+function breathCycle() {
+  const p = Math.max(0.5, D.breath.period || 4) * D.fps;
+  if (!D.loop) return { frames: p, count: 0 };
+  const count = Math.max(1, Math.round(D.frameCount / p));
+  return { frames: D.frameCount / count, count };
+}
+/** 0（吐き切り）〜 1（吸い切り）。吸うのを短く、吐くのを長く */
+function breathWave(f) {
+  const u = (((f / breathCycle().frames) % 1) + 1) % 1, a = 0.4;
+  return u < a ? 0.5 - 0.5 * Math.cos(Math.PI * u / a) : 0.5 + 0.5 * Math.cos(Math.PI * (u - a) / (1 - a));
+}
+function applyBreath(f) {
+  if (!breathBones().length) return;
+  const s = (breathWave(f) - 0.5) * (D.breath.amp / 100) * Math.PI / 180;
+  const up = new THREE.Vector3(0, 1, 0), right = modelForward().cross(up).normalize();
+  // 体の向きに合わせる（親の骨が元のポーズから回った分）
+  const bodyQ = i => { const p = M.parent[i]; return p < 0 ? new THREE.Quaternion() : wq(M.bones[p]).multiply(M.restWQ[p].clone().invert()); };
+  const pitch = (i, deg) => rotateWorld(M.bones[i], axisAngleQ(right.clone().applyQuaternion(bodyQ(i)), deg * s));
+  let total = 0;
+  for (const n of ['Spine', 'Chest', 'UpperChest']) {
+    const i = M.human[n];
+    if (i == null) continue;
+    pitch(i, BREATH_DEG[n]);
+    total += BREATH_DEG[n];
+  }
+  const back = [M.human.Neck, M.human.Head].filter(i => i != null);
+  back.forEach(i => pitch(i, -total / back.length));
+  for (const side of ['Left', 'Right']) {
+    const i = M.human[side + 'Shoulder'], c = M.human[side + 'UpperArm'];
+    if (i == null || c == null) continue;
+    const axis = wp(M.bones[c]).sub(wp(M.bones[i])).cross(up.clone().applyQuaternion(bodyQ(i)));
+    if (axis.lengthSq() < 1e-12) continue;
+    rotateWorld(M.bones[i], axisAngleQ(axis.normalize(), BREATH_DEG.Shoulder * s));
+  }
+}
+
+function refreshBreathUI() {
+  $('brOn').checked = D.breath.on;
+  $('brPeriod').value = D.breath.period;
+  $('brAmp').value = D.breath.amp;
+  const c = breathCycle();
+  $('brNote').textContent = D.loop ? `ループで${c.count}回` : '';
+  $('bBreath').classList.toggle('on', D.breath.on);
+}
+function changeBreath(fn) {
+  fn();
+  docVer++;
+  markDirty();
+  refreshBreathUI();
+}
+$('bBreath').onclick = () => {
+  const pop = $('breathPop');
+  if (pop.style.display === 'flex') { pop.style.display = 'none'; return; }
+  refreshBreathUI();
+  const r = $('bBreath').getBoundingClientRect();
+  Object.assign(pop.style, { display: 'flex', left: r.left + 'px', top: r.bottom + 4 + 'px' });
+};
+$('brOn').onchange = e => changeBreath(() => { D.breath.on = e.target.checked; });
+$('brPeriod').onchange = e => changeBreath(() => { D.breath.period = clamp(Number(e.target.value) || 4, 0.5, 60); });
+$('brAmp').onchange = e => changeBreath(() => { D.breath.amp = clamp(Number(e.target.value) || 0, 0, 500); });
+document.addEventListener('pointerdown', e => {
+  if (!e.target.closest('#breathPop, #bBreath')) $('breathPop').style.display = 'none';
+});
+
+// ---------- 動画（3D の横に並べて、タイムラインと一緒に動かす） ----------
+
+const V = {
+  el: $('vid'), url: null, offset: 0, ...loadLocal('mt.video', { width: 420, mirror: false, muted: true }),
+  image: false,
+};
+const saveVideoPrefs = () => saveLocal('mt.video', { width: V.width, mirror: V.mirror, muted: V.muted });
+const hasVideo = () => !!V.url && !V.image && V.el.readyState >= 1;
+/** フレーム f のときの動画の時刻 */
+const videoTimeOf = f => V.offset + f / D.fps;
+
+function refreshVideoUI() {
+  $('vpane').style.width = V.width + 'px';
+  $('bVideo').classList.toggle('on', $('vpane').style.display !== 'none');
+  V.el.style.transform = $('vimg').style.transform = V.mirror ? 'scaleX(-1)' : '';
+  V.el.style.display = V.image ? 'none' : '';
+  $('vimg').style.display = V.image ? '' : 'none';
+  document.querySelectorAll('#vpane .vvid').forEach(e => { e.style.display = V.image ? 'none' : ''; });
+  $('vStart').value = Math.round(V.offset * 1000) / 1000;
+  for (const id of ['vStart', 'vZero']) $(id).disabled = !hasVideo();
+  V.el.muted = V.muted;
+  $('vMirror').classList.toggle('on', V.mirror);
+  $('vMute').textContent = V.muted ? '音なし' : '音あり';
+  $('vEmpty').style.display = V.url ? 'none' : '';
+  for (const id of ['vBack', 'vFwd', 'vSeek']) $(id).disabled = !hasVideo();
+  refreshVideoTime();
+}
+function refreshVideoTime() {
+  if (!hasVideo()) { $('vTime').textContent = ''; return; }
+  const t = videoTimeOf(S.frame);
+  $('vSeek').max = V.el.duration || 0;
+  $('vSeek').value = t;
+  const mmss = x => `${Math.floor(x / 60)}:${(x % 60).toFixed(2).padStart(5, '0')}`;
+  $('vTime').textContent = `${mmss(Math.max(0, t))} = ${S.frame}F`;
+}
+function seekVideo(t) {
+  if (!hasVideo()) return;
+  const d = V.el.duration || 0;
+  V.el.currentTime = clamp(t, 0, Math.max(0, d - 0.001));
+}
+function videoFollow() {
+  if (!hasVideo() || S.playing) return;
+  seekVideo(videoTimeOf(S.frame));
+  refreshVideoTime();
+}
+function videoPlay() {
+  if (!hasVideo()) return;
+  seekVideo(videoTimeOf(S.playT));
+  if (videoTimeOf(S.playT) < V.el.duration) V.el.play().catch(() => {});
+}
+function videoPause() {
+  if (hasVideo()) V.el.pause();
+}
+/** 再生中、動画が遅れたり進みすぎたりしたら合わせ直す（ループで戻ったときも） */
+function videoSync() {
+  if (!hasVideo()) return;
+  const t = videoTimeOf(S.playT);
+  if (t < 0 || t >= V.el.duration) { if (!V.el.paused) V.el.pause(); seekVideo(t); return; }
+  if (Math.abs(V.el.currentTime - t) > 0.15) seekVideo(t);
+  if (V.el.paused) V.el.play().catch(() => {});
+  refreshVideoTime();
+}
+
+function openVideo(file) {
+  if (!file) return;
+  if (V.url) URL.revokeObjectURL(V.url);
+  V.url = URL.createObjectURL(file);
+  V.image = /^image\//.test(file.type) || /\.(png|jpe?g|webp|bmp|gif)$/i.test(file.name);
+  V.offset = 0;
+  if (V.image) { V.el.pause(); V.el.removeAttribute('src'); V.el.load(); $('vimg').src = V.url; }
+  else { $('vimg').removeAttribute('src'); V.el.src = V.url; }
+  refreshVideoUI();
+  $('vName').textContent = file.name;
+  $('vName').title = file.name;
+}
+V.el.addEventListener('loadedmetadata', () => { videoFollow(); refreshVideoUI(); });
+$('vimg').addEventListener('load', refreshVideoUI);
+$('bVideo').onclick = () => {
+  const p = $('vpane');
+  p.style.display = p.style.display === 'none' ? 'flex' : 'none';
+  refreshVideoUI();
+};
+$('vOpen').onclick = () => $('vFile').click();
+$('vFile').onchange = e => { openVideo(e.target.files[0]); e.target.value = ''; };
+$('vbox').addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); });
+$('vbox').addEventListener('drop', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  const f = [...e.dataTransfer.files].find(x => /^(video|image)\//.test(x.type) || /\.(mp4|webm|mov|mkv|png|jpe?g|webp)$/i.test(x.name));
+  if (f) openVideo(f);
+});
+$('vMirror').onclick = () => { V.mirror = !V.mirror; saveVideoPrefs(); refreshVideoUI(); };
+$('vMute').onclick = () => { V.muted = !V.muted; saveVideoPrefs(); refreshVideoUI(); };
+// つまみは「今のフレームのときの動画の時刻」。動かすと、動画とタイムラインの対応がずれる
+$('vSeek').oninput = e => { V.offset = Number(e.target.value) - S.frame / D.fps; seekVideo(Number(e.target.value)); refreshVideoTime(); $('vStart').value = Math.round(V.offset * 1000) / 1000; };
+const nudge = dir => { V.offset += dir / D.fps; videoFollow(); refreshVideoUI(); };
+$('vStart').onchange = e => { V.offset = Number(e.target.value) || 0; videoFollow(); refreshVideoUI(); };
+// 今見えている動画の位置を 0 フレームにして、0 フレームへ行く
+$('vZero').onclick = () => { V.offset = V.el.currentTime; goFrame(0); refreshVideoUI(); };
+$('vBack').onclick = () => nudge(-1);
+$('vFwd').onclick = () => nudge(1);
+
+// 幅（左の縁をドラッグ）
+$('vresize').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const x0 = e.clientX, w0 = V.width;
+  const move = ev => { V.width = clamp(w0 - (ev.clientX - x0), 200, window.innerWidth * 0.7); $('vpane').style.width = V.width + 'px'; };
+  const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); saveVideoPrefs(); };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+});
+
+// ---------- 対称（左右の骨を一緒に動かす） ----------
+
+$('bSym').onclick = () => { S.sym = !S.sym; updateButtons(); };
+
+/** 親の骨の、元のポーズからの回し方（ワールド） */
+const parentDelta = i => (M.parent[i] >= 0 ? deltaOf(M.parent[i]) : new THREE.Quaternion());
+
+/** 骨 i を動かしたら、反対側の骨に左右反転した回し方を入れる（親からの回し方で。体が傾いていても対称になる） */
+function mirrorBoneEdit(i) {
+  if (!S.sym) return;
+  const j = partnerOf(i);
+  if (j === i) return;
+  const own = parentDelta(i).invert().multiply(deltaOf(i));
+  setWorldQuat(M.bones[j], parentDelta(j).multiply(mirrorQ(own)).multiply(M.restWQ[j]));
+  constrainBone(j);
+  S.edited.add(j);
+}
+
+/** 手先・足先（またはポール）を動かしたら、反対側の手先・足先とポールを鏡の位置に置いて解く */
+function mirrorLimbEdit(L) {
+  if (!S.sym) return;
+  const key = L.key.startsWith('Left') ? L.key.replace('Left', 'Right') : L.key.replace('Right', 'Left');
+  const R = M.limbs.find(x => x.key === key);
+  if (!R) return;
+  // 左右の共通の親（腕なら胸、脚なら腰）の向きの中で反転する
+  let c = M.parent[L.a];
+  while (c >= 0 && !isAncestor(c, R.a)) c = M.parent[c];
+  const g = c >= 0 ? deltaOf(c) : new THREE.Quaternion(), gi = g.clone().invert();
+  const o = c >= 0 ? wp(M.bones[c]) : new THREE.Vector3();
+  const mirP = p => o.clone().add(mirrorV(p.clone().sub(o).applyQuaternion(gi)).applyQuaternion(g));
+  R.target.position.copy(mirP(L.target.position));
+  R.pole.position.copy(mirP(L.pole.position));
+  // 手先の向き: 元のポーズからの回し方を、共通の親の中で反転
+  const d = L.target.quaternion.clone().multiply(M.restWQ[L.c].clone().invert());
+  R.target.quaternion.copy(g.clone().multiply(mirrorQ(gi.clone().multiply(d).multiply(g))).multiply(gi).multiply(M.restWQ[R.c]));
+  R.target.updateMatrixWorld(true);
+  R.pole.updateMatrixWorld(true);
+  solveLimb(R);
+}
+
+// ---------- 頭の向き（的を動かすと、首と頭がそちらを向く） ----------
+
+const LOOK = { target: new THREE.Object3D() };
+scene.add(LOOK.target);
+
+/** 目の間の位置。目の骨が無ければ、頭の骨から少し上 */
+function eyePos() {
+  const H = M.human;
+  if (H.LeftEye != null && H.RightEye != null) return wp(M.bones[H.LeftEye]).add(wp(M.bones[H.RightEye])).multiplyScalar(0.5);
+  return wp(M.bones[H.Head]).add(new THREE.Vector3(0, M.size * 0.05, 0).applyQuaternion(deltaOf(H.Head)));
+}
+const headForward = () => modelForward().applyQuaternion(deltaOf(M.human.Head));
+
+function syncLook() {
+  if (!M || M.human.Head == null || (S.sel?.kind === 'look' && gizmo.dragging)) return;
+  LOOK.target.position.copy(eyePos().addScaledVector(headForward(), M.size * 0.35));
+  LOOK.target.updateMatrixWorld(true);
+}
+
+/**
+ * 首に 4 割、残りを頭で向ける。毎回、体（首の親）を基準に向きを決め直す（少しずつ足すと、回しているうちに首がねじれていく）。
+ * 頭は体の上向きに対して傾けない。上限があるときは、左右と上下の角度を LOOK_LIMIT に収める
+ */
+function solveLook() {
+  const H = M.human, neck = H.Neck, head = H.Head, t = LOOK.target.position;
+  const base = parentDelta(neck ?? head), inv = base.clone().invert();
+  const up = new THREE.Vector3(0, 1, 0), fwd = modelForward(), left = up.clone().cross(fwd).normalize();
+  const rad = Math.PI / 180;
+  // 頭を回すと目の位置も動くので、数回決め直す
+  for (let k = 0; k < 3; k++) {
+    const d = t.clone().sub(eyePos()).applyQuaternion(inv).normalize();
+    let yaw = Math.atan2(d.dot(left), d.dot(fwd)), pitch = Math.asin(clamp(d.dot(up), -1, 1));
+    if (S.limits !== false) {
+      // 後ろ側（上限の外）にいるあいだは、直前に向いていた側に留める（真後ろで左右に振れないように）
+      const lim = LOOK_LIMIT.yaw * rad;
+      if (Math.abs(yaw) > lim && LOOK.lastYaw != null) yaw = LOOK.lastYaw >= 0 ? lim : -lim;
+      yaw = clamp(yaw, -lim, lim);
+      pitch = clamp(pitch, -LOOK_LIMIT.down * rad, LOOK_LIMIT.up * rad);
+    }
+    const turn = frac => axisAngleQ(up, yaw * frac).multiply(axisAngleQ(left, -pitch * frac));
+    if (k === 2) LOOK.lastYaw = yaw;
+    if (neck != null) setWorldQuat(M.bones[neck], base.clone().multiply(turn(0.4)).multiply(M.restWQ[neck]));
+    setWorldQuat(M.bones[head], base.clone().multiply(turn(1)).multiply(M.restWQ[head]));
+  }
+  if (neck != null) S.edited.add(neck);
+  S.edited.add(head);
+}
+
+// ---------- 上限（人の体で無理な回し方をしない。ボタンで外せる） ----------
+
+S.limits = (() => { try { return localStorage.getItem('mt.limits') !== '0'; } catch (e) { return true; } })();
+$('bLimit').onclick = () => {
+  S.limits = !S.limits;
+  try { localStorage.setItem('mt.limits', S.limits ? '1' : '0'); } catch (e) { /* 覚えられなくてもいい */ }
+  updateButtons();
+};
+
+/** [ねじり, 傾き] の上限（度）。人が回せる角度より少し上。null はその向きを縛らない。手首と前腕のねじりの合計は 180° 未満にする（180° で裏返るため） */
+const LIMIT_DEG = {
+  Spine: [35, 50], Chest: [35, 50], UpperChest: [35, 50], Neck: [55, 50], Head: [55, 50],
+  Shoulder: [null, 50], UpperArm: [120, null], LowerArm: [110, null], Hand: [60, 95],
+  UpperLeg: [70, null], LowerLeg: [45, null], Foot: [50, 70],
+};
+/** 頭の向きの的で、首と頭を合わせて向けられる角度（度） */
+const LOOK_LIMIT = { yaw: 100, up: 60, down: 70 };
+
+function limitOf(i) {
+  if (!M.limitMap) {
+    M.limitMap = new Map();
+    for (const [hn, i] of Object.entries(M.human)) {
+      if (i == null) continue;
+      const lim = LIMIT_DEG[hn.replace(/^(Left|Right)/, '')];
+      if (!lim) continue;
+      const c = M.children[i].find(k => M.restWP[k].distanceToSquared(M.restWP[i]) > 1e-10);
+      const dir = c != null ? M.restWP[c].clone().sub(M.restWP[i]) : M.restWP[i].clone().sub(M.restWP[M.parent[i]]);
+      M.limitMap.set(i, { axis: toParentFrame(i, dir), twist: lim[0], swing: lim[1] });
+    }
+  }
+  return M.limitMap.get(i);
+}
+
+/** 骨のローカルの回転を上限に収める。変えたら true */
+function applyLimits(i) {
+  if (!S.limits || !M) return false;
+  const L = limitOf(i);
+  if (!L) return false;
+  const b = M.bones[i];
+  const delta = b.quaternion.clone().multiply(M.restQ[i].clone().invert());
+  const { swing, twist } = swingTwist(delta, L.axis);
+  let changed = false;
+  if (L.twist != null) {
+    const ang = 2 * Math.atan2(twist.x * L.axis.x + twist.y * L.axis.y + twist.z * L.axis.z, twist.w);
+    const a = Math.atan2(Math.sin(ang), Math.cos(ang)), max = L.twist * Math.PI / 180;
+    if (Math.abs(a) > max) { twist.setFromAxisAngle(L.axis, Math.sign(a) * max); changed = true; }
+  }
+  if (L.swing != null) {
+    if (swing.w < 0) swing.set(-swing.x, -swing.y, -swing.z, -swing.w);
+    const ang = 2 * Math.acos(clamp(swing.w, -1, 1)), max = L.swing * Math.PI / 180;
+    if (ang > max) { swing.copy(new THREE.Quaternion().slerp(swing, max / ang)); changed = true; }
+  }
+  if (!changed) return false;
+  b.quaternion.copy(swing.multiply(twist).multiply(M.restQ[i]).normalize());
+  b.updateMatrixWorld(true);
+  return true;
+}
+
+/** 骨の自由度と上限の両方に収める。変えたら true */
+function constrainBone(i) {
+  const a = constrainDof(i);
+  const b = applyLimits(i);
+  return a || b;
+}
+
+refreshBreathUI();
+refreshVideoUI();
+
+// 確認用（コンソールから触る）
+window.MTP = { V, applyLimits, limitOf, poseAt, applyBreath, breathWave, breathCycle, openVideo, LOOK, solveLook, syncLook, mirrorBoneEdit, mirrorLimbEdit, eyePos, headForward };
+
+// ================================================================
 //  ループ
 // ================================================================
 
@@ -3731,8 +4141,9 @@ function tick(now) {
       if (D.loop) S.playT %= D.frameCount;
       else { S.playT = D.frameCount; stopPlay(); }
     }
-    poseAt(S.playT);
+    poseAt(S.playT, true);
     syncLimbs();
+    videoSync();
     const f = Math.floor(S.playT);
     if (f !== S.frame) { S.frame = f; $('frame').value = f; drawTimeline(); }
   }
