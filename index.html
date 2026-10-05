@@ -121,9 +121,12 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <body>
 <div id="app">
   <div id="toolbar">
-    <button id="bNew">新規</button>
-    <button id="bSave" title="Ctrl+S">保存</button>
-    <button id="bSaveAs">別名で保存</button>
+    <button id="bNew" title="キーを全部消して最初から">新規</button>
+    <button id="bOpen" title=".sismotion（プロジェクト）を開く">開く</button>
+    <button id="bSaveProj" title="キー・呼吸などをそのまま .sismotion に保存する（あとで開いて続きを作れる）">プロジェクト保存</button>
+    <button id="bSave" title="Ctrl+S">.anim保存</button>
+    <button id="bSaveAs">.anim別名保存</button>
+    <input id="projFile" type="file" accept=".sismotion,application/json" hidden>
     <span class="sep"></span>
     <button id="bMove" title="W">移動</button>
     <button id="bRot" title="E">回転</button>
@@ -299,7 +302,10 @@ function markDirty() {
   updateTitle();
 }
 function updateTitle() { document.title = `${D.name}${S.dirty ? ' *' : ''} - SisMotionTooL`; }
-window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+// 閉じるときは止めない（自動保存が今の状態を残す。次に開くとそのまま戻る）
+window.addEventListener('beforeunload', () => autoSaveNow());
+window.addEventListener('pagehide', () => autoSaveNow());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autoSaveNow(); });
 
 // ================================================================
 //  モデル
@@ -3363,6 +3369,134 @@ async function save(as) {
   else if (S.unity) await saveToUnity(as);
 }
 
+// ================================================================
+//  プロジェクト（.sismotion）と自動保存
+//  .anim は呼吸を焼き込むので、開き直すと元のキーに戻せない。編集の中身はこちらに残す
+// ================================================================
+
+const PROJECT_FORMAT = 'SisMotion';
+
+/** 今の編集の中身（キーは骨の名前で持つ。別のモデルで開いても名前が合う骨は使える） */
+function projectData() {
+  return {
+    format: PROJECT_FORMAT, version: 1, model: M?.name ?? null, name: D.name,
+    fps: D.fps, frameCount: D.frameCount, loop: D.loop, breath: { ...D.breath },
+    tracks: [...D.tracks].filter(([, t]) => t.keys.length).map(([i, t]) => ({
+      bone: M.names[i], keys: t.keys.map(k => ({ f: k.f, q: k.q.toArray(), ...(k.p ? { p: k.p.toArray() } : {}) })),
+    })),
+    shapes: [...D.shapes].filter(([, t]) => t.keys.length).map(([id, t]) => ({ id, keys: t.keys.map(k => ({ f: k.f, v: k.v })) })),
+    interp: [...D.interp],
+    frame: S.frame, dirty: S.dirty,
+  };
+}
+
+/** projectData() の中身を開く。戻り値は、モデルに無くて使えなかった骨とシェイプの数 */
+function applyProject(obj) {
+  D.name = obj.name || 'NewMotion';
+  D.fps = obj.fps || 30;
+  D.frameCount = Math.max(1, obj.frameCount || 60);
+  D.loop = obj.loop !== false;
+  D.breath = { on: false, period: 4, amp: 100, ...(obj.breath || {}) };
+  D.tracks.clear();
+  D.shapes.clear();
+  D.interp = new Map(obj.interp || []);
+  let missing = 0;
+  for (const t of obj.tracks || []) {
+    const i = M.byName.get(t.bone);
+    if (i == null) { missing++; continue; }
+    D.tracks.set(i, { keys: t.keys.map(k => ({ f: k.f, q: new THREE.Quaternion().fromArray(k.q), p: k.p && hasPos(i) ? new THREE.Vector3().fromArray(k.p) : null })) });
+  }
+  for (const sh of obj.shapes || []) {
+    if (!M.shapeById.has(sh.id)) { missing++; continue; }
+    D.shapes.set(sh.id, { keys: sh.keys.map(k => ({ f: k.f, v: k.v })) });
+  }
+  docVer++;
+  TL.sel.clear();
+  TL.fit = true;
+  goFrame(obj.frame || 0);
+  refreshBreathUI();
+  refreshAll();
+  return missing;
+}
+
+async function saveProject() {
+  if (!M) return;
+  const text = JSON.stringify(projectData());
+  const base = (D.name || 'NewMotion').replace(/\.(anim|sismotion)$/i, '');
+  try {
+    let name;
+    if (window.showSaveFilePicker) {
+      const h = await window.showSaveFilePicker({ suggestedName: `${base}.sismotion`, types: [{ description: 'SisMotionTooL プロジェクト', accept: { 'application/json': ['.sismotion'] } }] });
+      const w = await h.createWritable();
+      await w.write(text);
+      await w.close();
+      name = h.name;
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      a.download = name = `${base}.sismotion`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+    setStatus(`プロジェクトを保存: ${name}`);
+  } catch (e) {
+    if (e.name !== 'AbortError') setStatus('保存できません: ' + e.message, true);
+  }
+}
+
+async function openProjectFile(file) {
+  if (!file || !M) return;
+  let obj;
+  try { obj = JSON.parse(await file.text()); } catch (e) { setStatus('開けません: ' + file.name + ' は .sismotion ではありません', true); return; }
+  if (obj?.format !== PROJECT_FORMAT) { setStatus('開けません: ' + file.name + ' は .sismotion ではありません', true); return; }
+  if (S.dirty && hasKeys() && !confirm('今の内容を閉じて開きますか？（今の内容は取り消しで戻せます）')) return;
+  pushUndo();
+  const missing = applyProject({ ...obj, frame: 0, name: obj.name || file.name.replace(/\.sismotion$/i, '') });
+  S.dirty = false;
+  updateTitle();
+  autoSaveNow();
+  const notes = [];
+  if (obj.model && obj.model !== M.name) notes.push(`作ったときのモデルは ${obj.model}`);
+  if (missing) notes.push(`このモデルに無い骨・シェイプ ${missing}個`);
+  setStatus(`開いた: ${file.name}  キー${allKeyFrames().length}個` + (notes.length ? '  ' + notes.join('、') : ''), missing > 0);
+}
+
+// 自動保存: ブラウザの中に、モデルごとに今の状態を残す。開いたときに同じモデルならそのまま戻す
+const autosaveKey = () => M ? 'sismotion.autosave:' + M.name : null;
+let autoSavedVer = -1, autoSavedFrame = -1;
+/** 起動して、前回の続きを戻すかどうか決めるまでは書かない（読み込みの途中の空の状態で上書きしないように） */
+let autoReady = false;
+function autoSaveNow() {
+  if (!M || !autoReady || S.playing) return;
+  try { localStorage.setItem(autosaveKey(), JSON.stringify(projectData())); autoSavedVer = docVer; autoSavedFrame = S.frame; } catch (e) { /* 残せなくても動く */ }
+}
+setInterval(() => { if (M && (docVer !== autoSavedVer || S.frame !== autoSavedFrame)) autoSaveNow(); }, 2000);
+/** 前の状態が残っていれば戻す。戻したら true */
+function autoRestore() {
+  autoReady = true;
+  let obj = null;
+  try { obj = JSON.parse(localStorage.getItem(autosaveKey()) || 'null'); } catch (e) { /* 壊れていたら使わない */ }
+  if (obj?.format !== PROJECT_FORMAT || !(obj.tracks?.length || obj.shapes?.length)) return false;
+  applyProject(obj);
+  S.dirty = !!obj.dirty;
+  updateTitle();
+  autoSavedVer = docVer;
+  setStatus(`前回の続き（キー${allKeyFrames().length}個）。最初からにするときは「新規」`);
+  return true;
+}
+
+$('bOpen').onclick = () => $('projFile').click();
+$('projFile').onchange = e => { openProjectFile(e.target.files[0]); e.target.value = ''; };
+$('bSaveProj').onclick = () => saveProject();
+// .sismotion を画面に落としても開ける
+window.addEventListener('dragover', e => { if ([...e.dataTransfer.items].some(x => x.kind === 'file')) e.preventDefault(); });
+window.addEventListener('drop', e => {
+  const f = [...e.dataTransfer.files].find(x => /\.sismotion$/i.test(x.name));
+  if (!f) return;
+  e.preventDefault();
+  openProjectFile(f);
+});
+
 /** Unity が覚えていた編集用のデータ（または .anim から起こしたポーズ）を開く */
 function applyMotionJson(obj, fileName) {
   if (S.dirty && hasKeys() && !confirm('保存していない変更があります。開きますか？')) return;
@@ -3603,12 +3737,14 @@ function resetPose() {
   afterPoseOp(before);
 }
 function newDoc() {
-  if (S.dirty && hasKeys() && !confirm('保存していない変更があります。捨てますか？')) return;
+  if (hasKeys() && !confirm('キーを全部消して最初からにしますか？（取り消しで戻せます）')) return;
   pushUndo();
   D.tracks.clear();
   D.shapes.clear();
   D.interp.clear();
   D.name = 'NewMotion';
+  Object.assign(D, { fps: 30, frameCount: 60, loop: true, breath: { on: false, period: 4, amp: 100 } });
+  refreshBreathUI();
   docVer++;
   S.animHandle = null;
   if (S.unity) S.unity.path = null;
@@ -3617,6 +3753,8 @@ function newDoc() {
   TL.fit = true;
   goFrame(0);
   refreshAll();
+  autoSaveNow();
+  setStatus('新規にしました');
 }
 $('bNew').onclick = newDoc;
 $('bSave').onclick = () => save(false);
@@ -3652,7 +3790,8 @@ const ACTIONS = [
   ['play', '再生 / 停止', 'Space'], ['focus', '選んだ骨に寄る', 'KeyF'], ['deselect', '選択を外す', 'Escape'],
   ['undo', '取り消し', 'Ctrl+KeyZ'], ['redo', 'やり直し', 'Ctrl+KeyY'],
   ['copy', 'コピー', 'Ctrl+KeyC'], ['paste', '貼り付け', 'Ctrl+KeyV'], ['pasteMirror', '反転して貼り付け', 'Ctrl+Shift+KeyV'],
-  ['save', '保存', 'Ctrl+KeyS'], ['saveAs', '別名で保存', 'Ctrl+Shift+KeyS'],
+  ['save', '.anim保存', 'Ctrl+KeyS'], ['saveAs', '.anim別名保存', 'Ctrl+Shift+KeyS'],
+  ['saveProj', 'プロジェクト保存', 'Ctrl+Alt+KeyS'], ['openProj', '開く', 'Ctrl+KeyO'], ['newDoc', '新規', ''],
   ['ik', 'IKの入 / 切', ''], ['pin', '固定の入 / 切', ''], ['falloff', '伝染の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
   ['onion', 'オニオンの入 / 切', ''], ['boneView', '骨の表示を切り替え', ''],
   ['mirrorAll', '全身を反転', ''], ['mirrorSel', '選んだ骨を反対側へ', ''],
@@ -3663,13 +3802,13 @@ const RUN = {
   prevFrame: () => goFrame(S.frame - 1), nextFrame: () => goFrame(S.frame + 1), prevKey: () => jumpKey(-1), nextKey: () => jumpKey(1),
   play: () => $('bPlay').click(), focus: () => focusSelected(), deselect: () => { TL.sel.clear(); select(null); },
   undo: () => undo(), redo: () => redo(), copy: () => (TL.sel.size ? copyKeys() : copyPose()), paste: () => (lastCopy === 'keys' ? pasteKeys() : pastePose(false)), pasteMirror: () => pastePose(true),
-  save: () => save(false), saveAs: () => save(true),
+  save: () => save(false), saveAs: () => save(true), saveProj: () => saveProject(), openProj: () => $('bOpen').click(), newDoc: () => newDoc(),
   ik: () => $('bIK').click(), pin: () => $('bPin').click(), falloff: () => $('bFalloff').click(), autoKey: () => $('bAuto').click(),
   onion: () => $('bOnion').click(), boneView: () => $('bBones').click(),
   mirrorAll: () => mirrorPose('all'), mirrorSel: () => mirrorPose('sel'),
 };
 // 文字を打っている最中でも効くもの
-const WHILE_TYPING = new Set(['save', 'saveAs']);
+const WHILE_TYPING = new Set(['save', 'saveAs', 'saveProj', 'openProj']);
 
 const MOUSE_ACTIONS = [['orbit', '視点を回す'], ['pan', '視点をずらす'], ['zoom', '寄る・引く（ドラッグ）']];
 const mb = (button, alt = false, shift = false, ctrl = false) => ({ button, alt, shift, ctrl });
@@ -3720,7 +3859,7 @@ function applySettings() {
   keyToAction = new Map();
   for (const a of ACTIONS) if (CFG.keys[a[0]]) keyToAction.set(CFG.keys[a[0]], a[0]);
   // ボタンのヒント
-  const hint = { bMove: 'move', bRot: 'rotate', bSpace: 'space', bSave: 'save', bSaveAs: 'saveAs', bPlay: 'play', bPrev: 'prevFrame', bNext: 'nextFrame',
+  const hint = { bMove: 'move', bRot: 'rotate', bSpace: 'space', bSave: 'save', bSaveAs: 'saveAs', bSaveProj: 'saveProj', bOpen: 'openProj', bPlay: 'play', bPrev: 'prevFrame', bNext: 'nextFrame',
     bPrevKey: 'prevKey', bNextKey: 'nextKey', bKey: 'key', bKeyAll: 'keyAll', bDel: 'deleteKey' };
   for (const [btn, id] of Object.entries(hint)) $(btn).title = CFG.keys[id] ? keyLabel(id) : '';
   renderHelp();
@@ -4330,13 +4469,16 @@ async function loadDefaultModel() {
   else if (M?.muscleInfo) { S.sample = true; }
   S.dirty = false;
   updateTitle();
+  // Unity から .anim を開いたときはそれ。そうでなければ、前回の続きが残っていれば戻す
+  if (!unity?.man.anim) autoRestore();
+  else autoReady = true;
 }
 loadDefaultModel();
 
 // 確認用（コンソールから触る）
 window.MT = {
   THREE, D, S, get M() { return M; }, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
-  mirrorPose, copyPose, pastePose, select, undo, redo, pick, newDoc, keyAll, allKeyFrames, constrainBone, camera, gizmo,
+  mirrorPose, copyPose, pastePose, select, undo, redo, pick, newDoc, keyAll, projectData, applyProject, allKeyFrames, constrainBone, camera, gizmo,
   applyUnityView, restoreUnityView, analyzeLimb, orbit, get settings() { return CFG; },
   TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY, buildAnim, buildAnimModel, animFrame,
   /** ワールドの位置 → 画面（クライアント座標）。 */
