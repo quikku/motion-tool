@@ -199,7 +199,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <div id="help" class="modal"><div class="box">
   <h3>操作</h3>
   <table id="helpTable"></table>
-  <p id="helpNote" style="color:var(--dim);margin:8px 0 0">保存した.motion.jsonをUnityに置いて、右クリック → SisMotionTooL → .animにする</p>
+  <p id="helpNote" style="color:var(--dim);margin:8px 0 0"></p>
   <p style="color:var(--dim);margin:8px 0 0">最初のモデル: <a href="https://minto-akayama.booth.pm/items/8861598" target="_blank" rel="noopener" style="color:var(--accent)">茜犬 -Akane-</a>（CC0、赤山みんと）</p>
 </div></div>
 <div id="settings" class="modal"><div class="box"><h3>設定</h3><div id="settingsBody"></div></div></div>
@@ -3997,7 +3997,8 @@ function renderHelp() {
   add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shiftで足す、右クリックでつなぎ方');
   add('行', '名前で選ぶ、＋ かダブルクリックでキー、ホイールで縦、Shift+ホイールで横、Ctrl+ホイールで拡大');
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
-  $('helpNote').textContent = S.sample ? '保存すると、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '保存した.motion.jsonをUnityに置いて、右クリック → SisMotionTooL → .animにする';
+  $('helpNote').textContent = (S.sample ? '「.anim保存」で、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '「.anim保存」で、Unityのプロジェクトに.animができる') +
+    '。作りかけは自動で残り、次に開くと続きから。「プロジェクト保存」で.sismotionにも残せる';
 }
 
 window.addEventListener('keydown', e => {
