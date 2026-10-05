@@ -3911,7 +3911,8 @@ function videoPause() {
 }
 /** 再生中、動画が遅れたり進みすぎたりしたら合わせ直す（ループで戻ったときも） */
 function videoSync() {
-  if (!hasVideo()) return;
+  // 最後まで行って止めたフレームでも呼ばれるので、止めたあとは動かし直さない
+  if (!hasVideo() || !S.playing) return;
   const t = videoTimeOf(S.playT);
   if (t < 0 || t >= V.el.duration) { if (!V.el.paused) V.el.pause(); seekVideo(t); return; }
   if (Math.abs(V.el.currentTime - t) > 0.15) seekVideo(t);
