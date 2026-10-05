@@ -1797,6 +1797,7 @@ let press = null;
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0 || !M || S.playing || !gizmo.object) return;
   const r = renderer.domElement.getBoundingClientRect();
+  if (gizmo.axis && gizmo.axis !== 'XYZE') return; // 軸の矢印・輪の上は、今まで通りギズモが取る
   const hit = markerAt(e.clientX - r.left, e.clientY - r.top);
   if (!hit || sameSel(hit, S.sel)) return;
   gizmo.enabled = false;
@@ -3417,6 +3418,18 @@ function projectData() {
 
 /** projectData() の中身を開く。戻り値は、モデルに無くて使えなかった骨とシェイプの数 */
 function applyProject(obj) {
+  // 壊れたデータで途中まで書き換わらないように、先に全部組んでから入れ替える
+  const tracks = new Map(), shapes = new Map(), interp = new Map(obj.interp || []);
+  let missing = 0;
+  for (const t of obj.tracks || []) {
+    const i = M.byName.get(t.bone);
+    if (i == null) { missing++; continue; }
+    tracks.set(i, { keys: t.keys.map(k => ({ f: k.f, q: new THREE.Quaternion().fromArray(k.q), p: k.p && hasPos(i) ? new THREE.Vector3().fromArray(k.p) : null })) });
+  }
+  for (const sh of obj.shapes || []) {
+    if (!M.shapeById.has(sh.id)) { missing++; continue; }
+    shapes.set(sh.id, { keys: sh.keys.map(k => ({ f: k.f, v: k.v })) });
+  }
   D.name = obj.name || 'NewMotion';
   D.fps = obj.fps || 30;
   D.frameCount = Math.max(1, obj.frameCount || 60);
@@ -3424,17 +3437,9 @@ function applyProject(obj) {
   D.breath = { on: false, period: 4, amp: 100, ...(obj.breath || {}) };
   D.tracks.clear();
   D.shapes.clear();
-  D.interp = new Map(obj.interp || []);
-  let missing = 0;
-  for (const t of obj.tracks || []) {
-    const i = M.byName.get(t.bone);
-    if (i == null) { missing++; continue; }
-    D.tracks.set(i, { keys: t.keys.map(k => ({ f: k.f, q: new THREE.Quaternion().fromArray(k.q), p: k.p && hasPos(i) ? new THREE.Vector3().fromArray(k.p) : null })) });
-  }
-  for (const sh of obj.shapes || []) {
-    if (!M.shapeById.has(sh.id)) { missing++; continue; }
-    D.shapes.set(sh.id, { keys: sh.keys.map(k => ({ f: k.f, v: k.v })) });
-  }
+  for (const [i, t] of tracks) D.tracks.set(i, t);
+  for (const [id, t] of shapes) D.shapes.set(id, t);
+  D.interp = interp;
   docVer++;
   TL.sel.clear();
   TL.fit = true;
@@ -3476,7 +3481,9 @@ async function openProjectFile(file) {
   if (obj?.format !== PROJECT_FORMAT) { setStatus('開けません: ' + file.name + ' は .sismotion ではありません', true); return; }
   if (S.dirty && hasKeys() && !confirm('今の内容を閉じて開きますか？（今の内容は取り消しで戻せます）')) return;
   pushUndo();
-  const missing = applyProject({ ...obj, frame: 0, name: obj.name || file.name.replace(/\.sismotion$/i, '') });
+  let missing;
+  try { missing = applyProject({ ...obj, frame: 0, name: obj.name || file.name.replace(/\.sismotion$/i, '') }); }
+  catch (e) { undo(); setStatus('開けません: ' + file.name + ' の中身が壊れています', true); return; }
   S.dirty = false;
   updateTitle();
   autoSaveNow();
@@ -3502,7 +3509,7 @@ function autoRestore() {
   let obj = null;
   try { obj = JSON.parse(localStorage.getItem(autosaveKey()) || 'null'); } catch (e) { /* 壊れていたら使わない */ }
   if (obj?.format !== PROJECT_FORMAT || !(obj.tracks?.length || obj.shapes?.length)) return false;
-  applyProject(obj);
+  try { applyProject(obj); } catch (e) { return false; } // 形が合わない残りは使わない
   S.dirty = !!obj.dirty;
   updateTitle();
   autoSavedVer = docVer;
