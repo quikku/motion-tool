@@ -318,7 +318,7 @@ const MISSING_TEX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAA
  * FBX・画像・モデルの情報（FBX名.motiontool.json）から、モデルを出す。
  * texByMat: マテリアル名（小文字）→ 画像。Unityから開いたときに渡される。無ければ、画像の名前から探す。
  */
-async function loadModelFiles(files, texByMat = null) {
+async function loadModelFiles(files, texByMat = null, body = null) {
   const fbx = files.find(f => /\.fbx$/i.test(f.name));
   if (!fbx) return false;
   const images = new Map();
@@ -358,9 +358,48 @@ async function loadModelFiles(files, texByMat = null) {
   group.quaternion.setFromRotationMatrix(axisConversion(readAxes(buffer)));
   if (loading) await Promise.race([done, new Promise(res => setTimeout(res, 4000))]);
   const missing = fixMaterials(group, images, urls, texByMat || new Map());
+  const fileRest = applyBodyBones(group, body);
   setModel(group, fbx.name, info);
+  // 保存のときに送る元のポーズは FBX のまま（Unity は FBX と比べ、FBX の元のポーズに当てはめる）
+  if (M && fileRest) M.fileRest = M.names.map((n, i) => fileRest.get(n) ?? { p: M.restWP[i], q: M.restWQ[i] });
+  applyBodyShapes(body);
   if (missing.length) setStatus($('status').textContent + `  テクスチャなし: ${missing.join(', ')}`);
   return true;
+}
+
+/**
+ * シーンのアバターで変えてある骨の大きさ・位置・向き（Unity が FBX と比べた差）を、元のポーズに入れる。
+ * Unity とは X を反転した向きで、位置の単位は FBX のローカルの位置の長さの比で直す
+ */
+function applyBodyBones(group, body) {
+  if (!body?.bones?.length) return null;
+  const byName = new Map();
+  group.traverse(o => { const n = o.userData.originalName || o.name; if (o.isBone && !byName.has(n)) byName.set(n, o); });
+  // 変える前の、FBX のままの位置と向き（ワールド）
+  group.updateMatrixWorld(true);
+  const before = new Map([...byName].map(([n, o]) => [n, { p: wp(o), q: wq(o) }]));
+  for (const b of body.bones) {
+    const o = byName.get(b.name);
+    if (!o) continue;
+    if (b.scale?.length === 3) o.scale.multiply(new THREE.Vector3(...b.scale));
+    if (b.move?.length === 3) {
+      const ref = Math.hypot(...b.fbxPos);
+      o.position.add(mirrorV(new THREE.Vector3(...b.move)).multiplyScalar(ref > 1e-9 ? o.position.length() / ref : 1));
+    }
+    if (b.turn?.length === 4) o.quaternion.multiply(mirrorQ(new THREE.Quaternion(...b.turn)));
+  }
+  group.updateMatrixWorld(true);
+  return before;
+}
+/** シーンのアバターのシェイプキーの値を、キーが無いときの値にする（.anim には書かないので、Unity の再生でもシーンの値のまま） */
+function applyBodyShapes(body) {
+  if (!M) return;
+  M.shapeBase = new Map();
+  for (const s of body?.shapes || []) {
+    const id = `${s.path}|${s.name}`;
+    if (M.shapeById.has(id)) M.shapeBase.set(id, s.value);
+  }
+  if (M.shapeBase.size) goFrame(S.frame);
 }
 
 /** FBX の GlobalSettings の軸（UpAxis など）。バイナリとテキストの両方。無ければ Y-up・+Z 前・+X。 */
@@ -1465,7 +1504,7 @@ function poseAt(f, breath = false) {
   }
   for (const s of M.shapes) {
     const t = D.shapes.get(s.id);
-    s.mesh.morphTargetInfluences[s.idx] = t && t.keys.length ? evalShape(t, f) / 100 : 0;
+    s.mesh.morphTargetInfluences[s.idx] = (t && t.keys.length ? evalShape(t, f) : M.shapeBase?.get(s.id) ?? 0) / 100;
   }
   M.root.updateMatrixWorld(true);
   if (breath) applyBreath(f);
@@ -2948,7 +2987,8 @@ function buildFile() {
   const poses = [...frames].sort((a, b) => a - b).map(f => {
     poseAt(f, true);
     const rot = new Array(written.length * 4);
-    const put = k => { const d = deltaOf(written[k]); rot[k * 4] = r6(d.x); rot[k * 4 + 1] = r6(d.y); rot[k * 4 + 2] = r6(d.z); rot[k * 4 + 3] = r6(d.w); };
+    // 回し方は FBX のままの元のポーズから（体型を変えた骨も、Unity が FBX に当てはめると見えていた向きになる）
+    const put = k => { const i = written[k], d = M.fileRest ? wq(M.bones[i]).multiply(M.fileRest[i].q.clone().invert()) : deltaOf(i); rot[k * 4] = r6(d.x); rot[k * 4 + 1] = r6(d.y); rot[k * 4 + 2] = r6(d.z); rot[k * 4 + 3] = r6(d.w); };
     written.forEach((i, k) => { if (M.humanSet.has(i) || i === M.hips) put(k); });
     // 人型でない骨（髪・しっぽなど）は、見えていた向き（Unity の再生の姿での向き）で書く
     const view = applyUnityView();
@@ -2980,7 +3020,8 @@ function buildFile() {
     if (seen.has(n) || i === M.rootBone) return;
     seen.add(n);
     restBones.push(n);
-    rest.push(r6(M.restWP[i].x), r6(M.restWP[i].y), r6(M.restWP[i].z));
+    const rp = M.fileRest ? M.fileRest[i].p : M.restWP[i];
+    rest.push(r6(rp.x), r6(rp.y), r6(rp.z));
   });
   return {
     format: 'MotionToolWeb', version: 1, model: M.name, name: D.name,
@@ -4464,13 +4505,15 @@ async function filesFromUnity() {
     try { const r = await fetch(url); return r.ok ? new File([await r.blob()], name) : null; } catch (e) { return null; }
   };
   const texs = man.textures || [];
+  let body = null;
+  if (man.body) { try { const r = await fetch(man.body); if (r.ok) body = await r.json(); } catch (e) { body = null; } }
   const [fbx, info, ...images] = await Promise.all([
     get(man.fbx, man.model), get(man.info, man.model + '.motiontool.json'), ...texs.map(t => get(t.url, t.file)),
   ]);
   if (!fbx) return null;
   const texByMat = new Map();
   texs.forEach((t, i) => { if (images[i]) texByMat.set(t.material.toLowerCase(), images[i]); });
-  return { files: [fbx, info, ...images].filter(Boolean), texByMat, man };
+  return { files: [fbx, info, ...images].filter(Boolean), texByMat, man, body };
 }
 
 /** Unityで.animを選んで開いたとき。Unityが覚えていた編集用のデータか、無ければ.animから起こしたポーズが来る。 */
@@ -4496,7 +4539,7 @@ async function loadDefaultModel() {
   const unity = new URLSearchParams(location.search).has('unity') ? await filesFromUnity() : null;
   const files = unity ? unity.files : await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
   if (!files.some(f => /\.fbx$/i.test(f.name))) { say('モデルを読み込めませんでした'); return; }
-  await loadModelFiles(files, unity ? unity.texByMat : null);
+  await loadModelFiles(files, unity ? unity.texByMat : null, unity ? unity.body : null);
   if (unity) await openFromUnity(unity.man);
   // Unity を通さないページは、茜犬の見本（モデルの数値が入っているので、ブラウザだけで .anim を書ける）
   else if (M?.muscleInfo) { S.sample = true; }
