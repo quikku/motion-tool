@@ -3776,7 +3776,7 @@ window.addEventListener('keydown', e => {
 applySettings();
 
 // ================================================================
-//  個人用: 呼吸・動画（personal ブランチだけ。公開しない）
+//  呼吸・動画
 // ================================================================
 
 const loadLocal = (key, def) => { try { return { ...def, ...JSON.parse(localStorage.getItem(key) || '{}') }; } catch (e) { return { ...def }; } };
