@@ -3676,8 +3676,9 @@ async function openProjectFile(file) {
   setStatus(`開いた: ${file.name}  キー${allKeyFrames().length}個` + (notes.length ? '  ' + notes.join('、') : ''), missing > 0);
 }
 
-// 自動保存: ブラウザの中に、モデルごとに今の状態を残す。開いたときに同じモデルならそのまま戻す
-const autosaveKey = () => M ? 'sismotion.autosave:' + M.name : null;
+// 自動保存: ブラウザの中に、アバターごとに今の状態を残す。開いたときに同じアバターならそのまま戻す
+// Unity から開いたときはシーンのアバターごと（同じ FBX の改変違いで混ざらないように）。見本はモデルごと
+const autosaveKey = () => M ? 'sismotion.autosave:' + (S.unity?.avatar || M.name) : null;
 let autoSavedVer = -1, autoSavedFrame = -1;
 /** 起動して、前回の続きを戻すかどうか決めるまでは書かない（読み込みの途中の空の状態で上書きしないように） */
 let autoReady = false;
@@ -4662,7 +4663,7 @@ async function filesFromUnity() {
 
 /** Unityで.animを選んで開いたとき。Unityが覚えていた編集用のデータか、無ければ.animから起こしたポーズが来る。 */
 async function openFromUnity(man) {
-  S.unity = { path: man.anim || null, dir: man.saveDir || 'Assets' };
+  S.unity = { path: man.anim || null, dir: man.saveDir || 'Assets', avatar: man.avatar || null };
   document.body.classList.add('unity');
   if (!man.motion) return;
   try {
