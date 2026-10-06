@@ -206,7 +206,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
   <div class="prow"><label><input id="paShow" type="checkbox">見せる</label><label><input id="paGhost" type="checkbox">半透明</label><span class="sep"></span><span>動き</span><button id="paMotion" title="相手役の .sismotion を開く（同じタイムラインで一緒に再生する）">.sismotion…</button><button id="paCopy" title="今のアバターのキーを、骨の名前で相手役に写す">今の動きを写す</button><button id="paStill" title="相手役の動きを外して、元のポーズにする">動きなし</button></div>
   <div class="prow"><span>位置</span><span>X</span><input id="paX" type="number" step="0.01"><span>Y</span><input id="paY" type="number" step="0.01"><span>Z</span><input id="paZ" type="number" step="0.01"><span>向き</span><input id="paYaw" type="number" step="5"><span>°</span><button id="paFace" title="今のアバターの正面に、こちらを向けて置く">向かい合わせ</button></div>
   <div class="prow"><span id="paUnity" style="color:var(--dim)" title="Unityで2体の.animを再生するときは、この置き方にすると、ここで見たとおりに組み合う"></span></div>
-  <div class="prow"><span>くっつける</span><button id="paPin" title="IKで選んだ手先・足先を、相手の体にくっつける。押してから相手の体をクリックする（今のフレームでの位置の関係を、ほかのフレームでも保つ）">選んだ手足 → 相手の体…</button><button id="paLook" title="首と頭を、相手の顔（目の間）に向けてキーを打つ">視線 → 相手の顔</button><span id="paPinInfo" style="color:var(--dim)"></span></div>
+  <div class="prow"><span>くっつける</span><button id="paPin" title="IKで選んだ手先・足先か、選んだ腰（ルート）を、相手の体にくっつける。押してから相手の体をクリックする（今のフレームでの位置の関係を、ほかのフレームでも保つ）">選んだ手足・腰 → 相手の体…</button><button id="paLook" title="首と頭を、相手の顔（目の間）に向けてキーを打つ">視線 → 相手の顔</button><span id="paPinInfo" style="color:var(--dim)"></span></div>
   <div class="prow" id="paPinRow" style="display:none"><span>フレーム</span><input id="paFrom" type="number" min="0" step="1"><span>〜</span><input id="paTo" type="number" min="0" step="1"><span>間隔</span><input id="paStep" type="number" min="1" step="1" style="width:44px"><label title="手先・足先の向きも、相手の骨と一緒に回す"><input id="paRot" type="checkbox">向きも</label><button id="paBake" title="この範囲のフレームに、くっついた姿勢でキーを打つ（相手の動きを変えたら、もう一度押す）">キーを打つ</button><button id="paPinX">やめる</button></div>
   <input id="paFolderIn" type="file" webkitdirectory multiple hidden>
   <input id="paFilesIn" type="file" multiple hidden accept=".fbx,.json,.png,.jpg,.jpeg,.tga,.bmp,.webp">
@@ -2460,6 +2460,7 @@ function drawTimeline() {
   const f0 = Math.max(0, Math.floor(xf(TL.left))), f1 = Math.ceil(xf(w));
   const drag = TL.drag?.type === 'key' ? TL.drag.delta : 0;
   const endX = fx(D.frameCount), startX = fx(0);
+  const pairTicks = pairKeyTicks();
 
   const drawRow = (row, r) => {
     const y = rowY(r);
@@ -2486,6 +2487,13 @@ function drawTimeline() {
       g.moveTo(a, y); g.lineTo(a, y + TL.rowH); g.moveTo(z, y); g.lineTo(z, y + TL.rowH);
       if (r === 0) { g.moveTo(a, y + 0.5); g.lineTo(z, y + 0.5); }
       if (r === TL.rows.length - 1) { g.moveTo(a, y + TL.rowH - 0.5); g.lineTo(z, y + TL.rowH - 0.5); }
+      g.stroke();
+    }
+    // 全体の行に、相手役のキーの時刻を細い線で出す（タイミングを合わせる目安）
+    if (r === 0 && pairTicks.length) {
+      g.strokeStyle = 'rgba(170,150,255,.75)';
+      g.beginPath();
+      for (const f of pairTicks) { const x = Math.round(fx(f)) + 0.5; g.moveTo(x, y + 1); g.lineTo(x, y + 6); }
       g.stroke();
     }
     for (const f of rowKeys(row)) {
@@ -4023,6 +4031,7 @@ function switchActor() {
   if (S.playing) stopPlay();
   gizmo.detach();
   TL.sel.clear();
+  S.contactPick = null;
   const toNew = P.wrap.matrix.clone().invert();
   [M, P.M] = [P.M, M];
   [D, P.D] = [P.D, D];
@@ -4058,6 +4067,7 @@ function switchActor() {
 function pairChanged() {
   placePair();
   refreshPairUI();
+  drawTimeline();
   if (!M) return;
   if (!P.restoring) markDirty();
   autoSavedVer = -1;
@@ -4084,7 +4094,8 @@ function refreshPairUI() {
   put('paX', pl.x); put('paY', pl.y); put('paZ', pl.z); put('paYaw', pl.yaw);
   // Unity は X が逆（モデルの単位はメートル）。1 体目を原点・回転 0 に置いたときの 2 体目
   const u = P.place, n = v => Math.round(v * 1000) / 1000 + 0;
-  $('paUnity').textContent = has ? `Unityでは: 1体目を原点・回転0に置き、2体目を 位置 (${n(-u.x)}, ${n(u.y)}, ${n(u.z)})・回転Y ${n(-u.yaw)}° に置く` : '';
+  const uy = ((-u.yaw % 360) + 540) % 360 - 180 || 0;
+  $('paUnity').textContent = has ? `Unityでは: 1体目を原点・回転0に置き、2体目を 位置 (${n(-u.x)}, ${n(u.y)}, ${n(u.z)})・回転Y ${n(uy === -180 ? 180 : uy)}° に置く` : '';
 }
 
 function openPairPop() {
@@ -4184,6 +4195,17 @@ refreshPairUI();
 
 // ---------- くっつける: 手先・足先を、相手の骨に付けたままキーを打つ ----------
 
+/** 相手役のキーの時刻を、今のアバターのフレームにした物（相手がループなら、今の長さの中でくり返す） */
+function pairKeyTicks() {
+  if (!P.M || !P.D || !M) return [];
+  const keys = asPair(allKeyFrames), k = D.fps / P.D.fps, n = P.D.frameCount * k, out = [];
+  for (let lap = 0; lap * n <= D.frameCount + 1e-9; lap++) {
+    for (const f of keys) { const t = lap * n + f * k; if (t <= D.frameCount + 1e-9) out.push(t); }
+    if (!P.D.loop || n <= 0) break;
+  }
+  return [...new Set(out)];
+}
+
 /** 相手役の骨 i の、フレーム f での行列（今動かしているほうのワールド）。見た目どおり（Unity の再生の姿）で測る */
 function pairBoneWorld(i, f) {
   let m;
@@ -4206,45 +4228,51 @@ function pairEyeWorld(f) {
 }
 
 
+/** くっつける物: IK の手先・足先（{ limb }）か、腰・ルート（{ bone }。位置ごと動かせる骨） */
+const whatLabel = w => (w.limb != null ? M.limbs[w.limb].label : M.names[w.bone]);
+const whatBone = w => (w.limb != null ? M.limbs[w.limb].c : w.bone);
+
 function startContactPick() {
   if (!M || !P.M) return;
-  if (S.sel?.kind !== 'ik' && S.sel?.kind !== 'pole') { setStatus('先に、IKの手先か足先を選んでください（IKを入れて、手か足をクリック）', true); return; }
-  S.contactPick = S.sel.limb;
+  const sel = S.sel;
+  const what = sel?.kind === 'ik' || sel?.kind === 'pole' ? { limb: sel.limb } : sel?.kind === 'bone' && hasPos(sel.i) ? { bone: sel.i } : null;
+  if (!what) { setStatus('先に、IKの手先・足先か、腰（ルート）を選んでください', true); return; }
+  S.contactPick = what;
   // 手先のギズモが、ちょうどクリックしたい所に重なるので外しておく
   gizmo.detach();
   $('pairPop').style.display = 'none';
-  setStatus(`${M.limbs[S.contactPick].label}をくっつける所を、相手の体でクリック（Escでやめる）`);
+  setStatus(`${whatLabel(what)}をくっつける所を、相手の体でクリック（Escでやめる）`);
 }
 
 /** くっつける相手の骨をクリックで選ぶ（pick から） */
 function pickContact() {
-  const limb = S.contactPick;
+  const what = S.contactPick;
   S.contactPick = null;
   attachGizmo();
-  if (!P.M || !M.limbs[limb]) return;
+  if (!P.M) return;
   const other = P.M.meshes.filter(m => m.visible);
   for (const m of other) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
   const h = P.show ? raycaster.intersectObjects(other, false)[0] : null;
-  if (!h) { setStatus('相手の体に当たりませんでした。もう一度「選んだ手足 → 相手の体…」から', true); return; }
+  if (!h) { setStatus('相手の体に当たりませんでした。もう一度「選んだ手足・腰 → 相手の体…」から', true); return; }
   const bone = asPair(() => boneAtHit(h));
   if (bone < 0) { setStatus('相手の骨が見つかりませんでした', true); return; }
   // 今のフレームの、相手の骨と手先・足先の関係を覚える
-  const hand = M.bones[M.limbs[limb].c].matrixWorld.clone();
+  const hand = M.bones[whatBone(what)].matrixWorld.clone();
   const off = pairBoneWorld(bone, S.frame).invert().multiply(hand);
   const keys = allKeyFrames();
-  contact = { limb, bone, off, from: 0, to: D.frameCount, step: 1, rot: true, model: P.M, me: M };
+  contact = { what, bone, off, from: 0, to: D.frameCount, step: 1, rot: true, model: P.M, me: M };
   // 範囲は、キーのある所全部（キーが 1 か所だけなら全体）
   if (keys.length > 1) { contact.from = Math.min(S.frame, keys[0]); contact.to = Math.max(S.frame, keys[keys.length - 1]); }
   refreshContactUI();
   openPairPop();
-  setStatus(`${M.limbs[limb].label} → 相手の ${P.M.names[bone]}。範囲を決めて「キーを打つ」`);
+  setStatus(`${whatLabel(what)} → 相手の ${P.M.names[bone]}。範囲を決めて「キーを打つ」`);
 }
 
 function refreshContactUI() {
   const ok = contact && contact.me === M && contact.model === P.M;
   if (!ok) contact = null;
   $('paPinRow').style.display = ok ? 'flex' : 'none';
-  $('paPinInfo').textContent = !ok ? '' : contact.look ? '視線 → 相手の顔' : `${M.limbs[contact.limb].label} → 相手の ${P.M.names[contact.bone]}`;
+  $('paPinInfo').textContent = !ok ? '' : contact.look ? '視線 → 相手の顔' : `${whatLabel(contact.what)} → 相手の ${P.M.names[contact.bone]}`;
   $('paRot').parentElement.style.display = ok && contact.look ? 'none' : '';
   if (!ok) return;
   $('paFrom').value = contact.from;
@@ -4299,7 +4327,8 @@ function bakeLook() {
 function bakeContact() {
   if (!contact || contact.me !== M || contact.model !== P.M) return;
   if (contact.look) { bakeLook(); return; }
-  const L = M.limbs[contact.limb];
+  const w = contact.what;
+  const L = w.limb != null ? M.limbs[w.limb] : null;
   const frames = contactFrames();
   pushUndo();
   // 解くのは全部、今のキーのままの姿から（打ったキーで次のフレームの解き方が変わらないように）。キーは最後にまとめて打つ
@@ -4309,6 +4338,14 @@ function bakeContact() {
   for (const f of frames) {
     poseAt(f);
     pairBoneWorld(contact.bone, f).multiply(contact.off).decompose(p, q, sc);
+    if (!L) {
+      // 腰・ルート: その骨ごと動かす（手足は付いてくる。足を床に残したいときは、そのあと足をくっつけ直す）
+      const b = M.bones[w.bone];
+      setWorldPos(b, p);
+      if (contact.rot) setWorldQuat(b, q);
+      out.push([f, [[w.bone, b.quaternion.clone(), b.position.clone()]]]);
+      continue;
+    }
     L.target.position.copy(p);
     L.target.quaternion.copy(contact.rot ? q : wq(M.bones[L.c]));
     L.target.updateMatrixWorld(true);
@@ -4325,7 +4362,7 @@ function bakeContact() {
   goFrame(S.frame);
   // 届かないフレーム（腕・脚が伸び切る）は、そこまで伸ばしてキーを打つ。どれだけ足りないかを知らせる
   const short = miss > M.size * 0.005;
-  setStatus(`${L.label}を相手の ${P.M.names[contact.bone]} にくっつけて、${frames.length}フレームにキーを打ちました` +
+  setStatus(`${whatLabel(w)}を相手の ${P.M.names[contact.bone]} にくっつけて、${frames.length}フレームにキーを打ちました` +
     (short ? `  届かないフレームがあります（${missAt}Fで${(miss / M.size * 100).toFixed(1)}%（背の高さに対して）足りない。体を近づけてから打ち直してください）` : ''), short);
 }
 
@@ -5341,7 +5378,7 @@ loadDefaultModel();
 
 // 確認用（コンソールから触る）
 window.MT = {
-  THREE, S, get D() { return D; }, get M() { return M; }, get pair() { return P; }, get contact() { return contact; }, pairBoneWorld, pairEyeWorld, switchActor, bakeContact, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
+  THREE, S, get D() { return D; }, get M() { return M; }, get pair() { return P; }, get contact() { return contact; }, pairBoneWorld, pairEyeWorld, pairKeyTicks, switchActor, bakeContact, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
   mirrorPose, copyPose, pastePose, select, undo, redo, pick, boneAtHit, newDoc, keyAll, projectData, applyProject, allKeyFrames, constrainBone, camera, gizmo,
   applyUnityView, restoreUnityView, analyzeLimb, orbit, get settings() { return CFG; },
   TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY, buildAnim, buildAnimModel, animFrame,
