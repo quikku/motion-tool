@@ -149,6 +149,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bBreath">呼吸</button>
     <button id="bVideo">動画</button>
     <button id="bPair" title="2人目のアバター（相手役）を出して、同じタイムラインで一緒に再生する">相手 ▾</button>
+    <button id="bWho" title="動かすほうを入れ替える（相手役の体をクリックしても入れ替わる）" style="display:none"></button>
     <button id="bSettings" title="マウスとキーの割り当て">設定</button>
     <button id="bHelp">?</button>
     <span id="status"></span>
@@ -200,10 +201,13 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 <div id="ctx" class="menu"></div>
 <div id="breathPop" class="pop"><label><input id="brOn" type="checkbox">入れる</label><span>周期</span><input id="brPeriod" type="number" min="0.5" max="60" step="0.5"><span>秒</span><span>強さ</span><input id="brAmp" type="number" min="0" max="500" step="10"><span>%</span><span id="brNote" style="color:var(--dim)"></span></div>
 <div id="pairPop" class="pop col">
-  <div class="prow"><span id="paName" style="color:var(--dim)"></span></div>
+  <div class="prow"><span id="paName" style="color:var(--dim)"></span><span style="flex:1"></span><button id="paSwap" title="動かすほうを入れ替える（キーを打てるのは動かしているほうだけ）">⇄ 入れ替え</button></div>
   <div class="prow"><span>出す</span><button id="paSame" title="今のアバターをもう1体出す">同じアバター</button><button id="paFolder" title="FBXと画像が入ったフォルダを選ぶ">フォルダから…</button><button id="paFiles" title="FBXと画像（と .motiontool.json）をまとめて選ぶ">ファイルから…</button><button id="paDel">消す</button></div>
-  <div class="prow"><label><input id="paShow" type="checkbox">見せる</label><span class="sep"></span><span>動き</span><button id="paMotion" title="相手役の .sismotion を開く（同じタイムラインで一緒に再生する）">.sismotion…</button><button id="paCopy" title="今のアバターのキーを、骨の名前で相手役に写す">今の動きを写す</button><button id="paStill" title="相手役の動きを外して、元のポーズにする">動きなし</button></div>
+  <div class="prow"><label><input id="paShow" type="checkbox">見せる</label><label><input id="paGhost" type="checkbox">半透明</label><span class="sep"></span><span>動き</span><button id="paMotion" title="相手役の .sismotion を開く（同じタイムラインで一緒に再生する）">.sismotion…</button><button id="paCopy" title="今のアバターのキーを、骨の名前で相手役に写す">今の動きを写す</button><button id="paStill" title="相手役の動きを外して、元のポーズにする">動きなし</button></div>
   <div class="prow"><span>位置</span><span>X</span><input id="paX" type="number" step="0.01"><span>Y</span><input id="paY" type="number" step="0.01"><span>Z</span><input id="paZ" type="number" step="0.01"><span>向き</span><input id="paYaw" type="number" step="5"><span>°</span><button id="paFace" title="今のアバターの正面に、こちらを向けて置く">向かい合わせ</button></div>
+  <div class="prow"><span id="paUnity" style="color:var(--dim)" title="Unityで2体の.animを再生するときは、この置き方にすると、ここで見たとおりに組み合う"></span></div>
+  <div class="prow"><span>くっつける</span><button id="paPin" title="IKで選んだ手先・足先を、相手の体にくっつける。押してから相手の体をクリックする（今のフレームでの位置の関係を、ほかのフレームでも保つ）">選んだ手足 → 相手の体…</button><button id="paLook" title="首と頭を、相手の顔（目の間）に向けてキーを打つ">視線 → 相手の顔</button><span id="paPinInfo" style="color:var(--dim)"></span></div>
+  <div class="prow" id="paPinRow" style="display:none"><span>フレーム</span><input id="paFrom" type="number" min="0" step="1"><span>〜</span><input id="paTo" type="number" min="0" step="1"><span>間隔</span><input id="paStep" type="number" min="1" step="1" style="width:44px"><label title="手先・足先の向きも、相手の骨と一緒に回す"><input id="paRot" type="checkbox">向きも</label><button id="paBake" title="この範囲のフレームに、くっついた姿勢でキーを打つ（相手の動きを変えたら、もう一度押す）">キーを打つ</button><button id="paPinX">やめる</button></div>
   <input id="paFolderIn" type="file" webkitdirectory multiple hidden>
   <input id="paFilesIn" type="file" multiple hidden accept=".fbx,.json,.png,.jpg,.jpeg,.tga,.bmp,.webp">
   <input id="paMotionIn" type="file" accept=".sismotion,application/json" hidden>
@@ -290,7 +294,10 @@ const mirrorV = v => new THREE.Vector3(-v.x, v.y, v.z);
 //  状態
 // ================================================================
 
-let M = null; // モデル
+let M = null; // モデル（2 体いるときは、今動かしているほう。もう 1 体は P.M）
+/** 今動かしているアバターの入れ物。いつも原点に置く（もう 1 体は P.wrap で、こちらから見た位置に置く） */
+let ownWrap = new THREE.Group();
+scene.add(ownWrap);
 let D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } };
 let docVer = 0;
 const S = {
@@ -301,6 +308,10 @@ const S = {
   frame: 0, playing: false, playT: 0, sel: null, edited: new Set(), shapeEdited: new Set(), shapeSel: null, tab: 'bones',
   autoKey: true, ik: true, pin: false, falloff: false, falloffR: 10, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
   dirty: false,
+  /** 2 体いるとき、2 体目を動かしている */
+  second: false,
+  /** 今動かしているアバターをどこから読んだか（相手役の「同じアバター」と保存に使う） */
+  src: null,
 };
 
 function setStatus(text, err = false) {
@@ -673,11 +684,11 @@ function setModel(group, name, info = null, into = null) {
   const oldNames = M ? D.tracks.size && new Map([...D.tracks].map(([i, t]) => [M.names[i], t])) : null;
   if (M) {
     gizmo.detach();
-    scene.remove(M.root);
+    M.root.parent?.remove(M.root);
     for (const L of M.limbs) { scene.remove(L.target); scene.remove(L.pole); }
     M.root.traverse(o => { if (o.isMesh) { o.geometry.dispose(); [].concat(o.material).forEach(m => { m.map?.dispose(); m.dispose(); }); } });
   }
-  (into || scene).add(group);
+  (into || ownWrap).add(group);
   group.updateMatrixWorld(true);
 
   const isBone = o => o.isBone && !(o.parent && o.parent.isBone && o.parent.ID === o.ID);
@@ -2062,14 +2073,27 @@ function markerAt(x, y) {
 
 function pick(x, y) {
   const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(x / r.width * 2 - 1, -(y / r.height) * 2 + 1), camera);
+  if (S.contactPick != null) { pickContact(); return; }
   const hit = markerAt(x, y);
   if (hit) { select(hit); return; }
 
   // 体をクリック: その点をいちばん動かしている骨
-  raycaster.setFromCamera(new THREE.Vector2(x / r.width * 2 - 1, -(y / r.height) * 2 + 1), camera);
   const meshes = M.meshes.filter(m => m.visible);
   for (const m of meshes) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
   const hits = raycaster.intersectObjects(meshes, false);
+  // 相手役の体をクリックしたら、動かすほうを入れ替えてその骨を選ぶ（半透明のときは、後ろの今のアバターを優先）
+  if (P.M && P.show) {
+    const other = P.M.meshes.filter(m => m.visible);
+    for (const m of other) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
+    const h = raycaster.intersectObjects(other, false)[0];
+    if (h && (!hits.length || (!P.ghost && h.distance < hits[0].distance))) {
+      switchActor();
+      const i = boneAtHit(h);
+      if (i >= 0) select({ kind: 'bone', i });
+      return;
+    }
+  }
   for (const h of hits) {
     const i = boneAtHit(h);
     if (i < 0) continue;
@@ -3624,7 +3648,7 @@ async function save(as) {
 const PROJECT_FORMAT = 'SisMotion';
 
 /** 今の編集の中身（キーは骨の名前で持つ。別のモデルで開いても名前が合う骨は使える） */
-function projectData() {
+function docData() {
   return {
     format: PROJECT_FORMAT, version: 1, model: M?.name ?? null, name: D.name,
     fps: D.fps, frameCount: D.frameCount, loop: D.loop, breath: { ...D.breath },
@@ -3634,8 +3658,24 @@ function projectData() {
     shapes: [...D.shapes].filter(([, t]) => t.keys.length).map(([id, t]) => ({ id, keys: t.keys.map(k => ({ f: k.f, v: k.v })) })),
     interp: [...D.interp],
     frame: S.frame, dirty: S.dirty,
-    // 相手役（見るだけ）。相手役の中身を作るときは M・D が相手のものになっているので入れない
-    ...(M !== P.M && (P.M || P.pending) ? { pair: P.M ? pairData() : P.pending } : {}),
+  };
+}
+/**
+ * 保存する中身。2 体いるときは、1 体目を今までどおりの形で、2 体目を pair に入れる（どちらを動かしているかに関係なく、この順）。
+ * 相手役の中身を作るとき（asPair の中）は M・D が相手のものなので、1 体分だけ
+ */
+function projectData() {
+  const mine = docData();
+  if (M === P.M || !(P.M || P.pending)) return mine;
+  if (!P.M) return { ...mine, pair: P.pending };
+  const other = asPair(docData);
+  const [first, second] = S.second ? [other, mine] : [mine, other];
+  delete second.frame;
+  delete second.dirty;
+  const st = S.second ? S : P.st;
+  return {
+    ...first, frame: S.frame, dirty: S.dirty,
+    pair: { src: st.src?.kind || 'file', model: second.model, show: P.show, ghost: P.ghost, place: { ...P.place }, active: S.second ? 1 : 0, motion: second },
   };
 }
 
@@ -3663,6 +3703,8 @@ function readProject(obj) {
 
 /** projectData() の中身を開く。戻り値は、モデルに無くて使えなかった骨とシェイプの数 */
 function applyProject(obj) {
+  // 中身の 1 体目は、1 体目に入れる
+  if (S.second) switchActor();
   // 壊れたデータで途中まで書き換わらないように、先に全部組んでから入れ替える
   const { doc, missing } = readProject(obj);
   const { tracks, shapes, ...rest } = doc;
@@ -3683,8 +3725,9 @@ function applyProject(obj) {
 
 async function saveProject() {
   if (!M) return;
-  const text = JSON.stringify(projectData());
-  const base = (D.name || 'NewMotion').replace(/\.(anim|sismotion)$/i, '');
+  const data = projectData();
+  const text = JSON.stringify(data);
+  const base = (data.name || 'NewMotion').replace(/\.(anim|sismotion)$/i, '');
   try {
     let name;
     if (window.showSaveFilePicker) {
@@ -3712,6 +3755,7 @@ async function openProjectFile(file) {
   try { obj = JSON.parse(await file.text()); } catch (e) { setStatus('開けません: ' + file.name + ' は .sismotion ではありません', true); return; }
   if (obj?.format !== PROJECT_FORMAT) { setStatus('開けません: ' + file.name + ' は .sismotion ではありません', true); return; }
   if (S.dirty && hasKeys() && !confirm('今の内容を閉じて開きますか？（今の内容は取り消しで戻せます）')) return;
+  if (S.second) switchActor();
   pushUndo();
   let missing;
   try { missing = applyProject({ ...obj, frame: 0, name: obj.name || file.name.replace(/\.sismotion$/i, '') }); }
@@ -3726,7 +3770,8 @@ async function openProjectFile(file) {
 }
 
 // 自動保存: ブラウザの中に、アバターごと（avatarKey）に今の状態を残す。開いたときに同じアバターならそのまま戻す
-const autosaveKey = () => M ? 'sismotion.autosave:' + avatarKey() : null;
+/** 2 体いるときも、1 体目のアバターで残す（開いたときに読み込まれるのは 1 体目なので） */
+const autosaveKey = () => M ? 'sismotion.autosave:' + (S.second && P.M ? P.st.avatarId || P.M.name : avatarKey()) : null;
 let autoSavedVer = -1, autoSavedFrame = -1;
 /** 起動して、前回の続きを戻すかどうか決めるまでは書かない（読み込みの途中の空の状態で上書きしないように） */
 let autoReady = false;
@@ -3762,16 +3807,17 @@ window.addEventListener('drop', e => {
 });
 
 // ================================================================
-//  相手役（2 人目のアバター）。今は見るだけ: 置き場所を決めて、相手の動きを同じタイムラインで一緒に再生する
-//  相手のモデルとキーは P.M・P.D に置き、使うときだけ M・D と入れ替える（asPair）。再生も保存も同じ関数で済む
+//  相手役（2 人目のアバター）。置き場所を決めて、同じタイムラインで一緒に再生する。「⇄」で動かすほうを入れ替える
+//  動かしているほうは今までどおり M・D（と S の一部）。もう 1 体は P に置き、使うときだけ入れ替える（asPair）。
+//  動かしているほうはいつも原点にいるので、元のポーズ（restWP など）を使う計算はそのまま効く
 // ================================================================
 
 const P = {
   M: null, D: null,
-  /** どこから読んだか（kind: 'same' = 今のアバターと同じファイル、'file' = 選んだファイル） */
-  src: null,
-  show: true, motion: '',
-  /** 置き場所: ワールドの位置と、Y 軸まわりの向き（度） */
+  /** もう 1 体の、アバターごとの状態（S と入れ替える分と、取り消しの履歴） */
+  st: null,
+  show: true, ghost: false,
+  /** 2 体目の置き場所（1 体目から見た位置と、Y 軸まわりの向き（度））。どちらを動かしていても、この向きで持つ */
   place: { x: 0, y: 0, z: 0, yaw: 0 },
   wrap: new THREE.Group(),
   /** 開いたプロジェクトの相手役で、まだモデルが無くて戻せていない物 */
@@ -3780,6 +3826,10 @@ const P = {
   restoring: false,
 };
 scene.add(P.wrap);
+/** くっつけ方（下の「くっつける」）。limb: 今のアバターの IK の番号、bone: 相手の骨、off: 相手の骨から見た手先・足先の行列 */
+let contact = null;
+/** アバターごとに持つ S の中身（入れ替えるときに一緒に替える） */
+const ACTOR_STATE = ['sel', 'edited', 'shapeEdited', 'shapeSel', 'boneView', 'animHandle', 'avatarId', 'src'];
 
 const newDocData = () => ({ name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } });
 
@@ -3796,9 +3846,24 @@ function asPair(fn) {
   try { return fn(); }
   finally { P.M = M; P.D = D; M = keep.M; D = keep.D; S.boneView = keep.boneView; placePair(); }
 }
+
+const placeMatrix = pl => new THREE.Matrix4().compose(
+  new THREE.Vector3(pl.x, pl.y, pl.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.yaw * Math.PI / 180), new THREE.Vector3(1, 1, 1));
+function placeOf(m) {
+  const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+  m.decompose(p, q, sc);
+  const f = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+  const r3 = v => Math.round(v * 1000) / 1000;
+  return { x: r3(p.x), y: r3(p.y), z: r3(p.z), yaw: Math.round(Math.atan2(f.x, f.z) * 180 / Math.PI * 10) / 10 };
+}
+/** もう 1 体を、動かしているほうから見た置き場所 */
+const otherPlace = () => (S.second ? placeOf(placeMatrix(P.place).invert()) : { ...P.place });
+function setOtherPlace(pl) { P.place = S.second ? placeOf(placeMatrix(pl).invert()) : { ...pl }; }
+
 function placePair() {
-  P.wrap.position.set(P.place.x, P.place.y, P.place.z);
-  P.wrap.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), P.place.yaw * Math.PI / 180);
+  const m = placeMatrix(P.place);
+  if (S.second) m.invert();
+  m.decompose(P.wrap.position, P.wrap.quaternion, P.wrap.scale);
   P.wrap.visible = P.show;
   P.wrap.updateMatrixWorld(true);
 }
@@ -3818,6 +3883,25 @@ function updatePair() {
   });
 }
 
+/** 相手役を半透明にする（重なったところを見やすく）。動かしているほうは元に戻す */
+function setGhost(root, on) {
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    for (const m of [].concat(o.material)) {
+      const base = m.userData.base ??= { alphaTest: m.alphaTest, transparent: m.transparent, depthWrite: m.depthWrite };
+      m.transparent = on || base.transparent;
+      m.opacity = on ? 0.4 : 1;
+      m.alphaTest = on ? base.alphaTest * 0.4 : base.alphaTest;
+      m.depthWrite = on ? false : base.depthWrite;
+      m.needsUpdate = true;
+    }
+  });
+}
+function refreshGhost() {
+  if (M) setGhost(M.root, false);
+  if (P.M) setGhost(P.M.root, P.ghost);
+}
+
 async function loadPair(src) {
   if (!M) return false;
   setStatus('相手役を読み込み中…');
@@ -3829,13 +3913,18 @@ async function loadPair(src) {
   P.D = newDocData();
   asPair(() => {
     setModel(r.group, r.name, r.info, P.wrap);
+    // 茜犬の見本の .anim を書くときに要る（loadModelFiles と同じ）
+    if (r.fileRest) M.fileRest = M.names.map((n, i) => r.fileRest.get(n) ?? { p: M.restWP[i], q: M.restWQ[i] });
     applyBodyShapes(src.body, true);
     if (bufs) addParts(src.parts, bufs, true);
   });
-  P.src = src;
-  P.motion = '';
+  P.st = {
+    sel: null, edited: new Set(), shapeEdited: new Set(), shapeSel: null, boneView: P.M.humanSet.size >= 10 ? 'human' : 'all',
+    animHandle: null, avatarId: src.kind === 'same' ? S.avatarId : null, src, unityPath: null, undo: [], redo: [],
+  };
   P.show = true;
   updateButtons();
+  refreshGhost();
   facePair();
   setStatus(`相手役: ${r.name}` + (r.missing.length ? `  テクスチャなし: ${r.missing.join(', ')}` : ''));
   // 開いたプロジェクトの相手役が、このモデルを待っていたら戻す
@@ -3843,14 +3932,17 @@ async function loadPair(src) {
   return true;
 }
 
+/** もう 1 体を消す。2 体目を動かしていたときは、残ったほうが 1 体目になる */
 function removePair(clearPending = true) {
   if (clearPending) P.pending = null;
   if (!P.M) return;
   for (const L of P.M.limbs) { scene.remove(L.target); scene.remove(L.pole); }
   P.wrap.remove(P.M.root);
   P.M.root.traverse(o => { if (o.isMesh) { o.geometry.dispose(); [].concat(o.material).forEach(m => { m.map?.dispose(); m.dispose(); }); } });
-  P.M = P.D = P.src = null;
-  P.motion = '';
+  P.M = P.D = P.st = null;
+  S.second = false;
+  if (M) setGhost(M.root, false);
+  refreshWho();
   pairChanged();
 }
 
@@ -3863,38 +3955,33 @@ function facePair() {
   const yaw = Math.atan2(-fwd.x, -fwd.z) - Math.atan2(pf.x, pf.z);
   const want = M.restWP[M.hips].clone().addScaledVector(fwd, 0.25 * Math.max(M.size, P.M.size));
   const hips = P.M.restWP[P.M.hips].clone().applyAxisAngle(up, yaw);
-  const r3 = v => Math.round(v * 1000) / 1000;
-  let deg = Math.round(yaw * 180 / Math.PI) % 360;
-  if (deg > 180) deg -= 360;
-  if (deg <= -180) deg += 360;
-  P.place = { x: r3(want.x - hips.x), y: 0, z: r3(want.z - hips.z), yaw: deg };
+  setOtherPlace(placeOf(new THREE.Matrix4().compose(
+    new THREE.Vector3(want.x - hips.x, 0, want.z - hips.z), new THREE.Quaternion().setFromAxisAngle(up, yaw), new THREE.Vector3(1, 1, 1))));
   pairChanged();
 }
 
-/** 相手役の動きを、projectData() の形の物から入れる。戻り値は、相手のモデルに無くて使えなかった骨とシェイプの数 */
-function setPairMotion(obj, label) {
+/** 相手役の動きを、docData() の形の物から入れる。戻り値は、相手のモデルに無くて使えなかった骨とシェイプの数 */
+function setPairMotion(obj, name) {
   const { doc, missing } = asPair(() => readProject(obj));
   P.D = doc;
-  P.motion = label;
+  if (name) P.D.name = name;
+  P.st.undo.length = P.st.redo.length = 0;
   pairChanged();
   return missing;
 }
 
-/** 保存する相手役の中身（モデルのファイルは入れない。'same' なら開くときに今のアバターから作り直す） */
-function pairData() {
-  const motion = asPair(() => projectData());
-  delete motion.frame;
-  delete motion.dirty;
-  return { src: P.src?.kind || 'file', model: P.M.name, show: P.show, place: { ...P.place }, motionName: P.motion, motion };
-}
 function applyPairData(pd) {
   const restoring = P.restoring;
   P.restoring = true;
   P.pending = null;
-  if (pd.motion) setPairMotion(pd.motion, pd.motionName || '');
-  P.place = { x: 0, y: 0, z: 0, yaw: 0, ...pd.place };
+  if (pd.motion) setPairMotion(pd.motion, pd.motion.name || pd.motionName || '');
   P.show = pd.show !== false;
+  P.ghost = !!pd.ghost;
+  refreshGhost();
+  // 置き場所は 2 体目を 1 体目から見た向きで持っている。今は 1 体目を動かしている（開くときは 1 体目に戻すので）
+  P.place = { x: 0, y: 0, z: 0, yaw: 0, ...pd.place };
   pairChanged();
+  if (pd.active === 1 && !S.second) switchActor();
   P.restoring = restoring;
 }
 /** プロジェクトを開いたとき。同じアバターならすぐ作り直す。ファイルから読んだ相手役は、同じモデルを選び直すまで待つ */
@@ -3904,12 +3991,60 @@ async function restorePair(pd) {
   if (pd.src === 'same' && S.modelSrc) {
     // 戻すだけなので、保存していない変更があることにはしない
     P.restoring = true;
-    try { if (await loadPair({ ...S.modelSrc, kind: 'same' })) applyPairData(pd); }
+    // 読み終わると、loadPair が P.pending（= pd）を戻す
+    try { await loadPair({ ...S.modelSrc, kind: 'same' }); }
     finally { P.restoring = false; }
   } else {
     refreshPairUI();
     setStatus($('status').textContent + `  相手役（${pd.model}）は「相手」から同じモデルを選ぶと戻ります`);
   }
+}
+
+/** 取り消しの履歴は、アバターごと（骨の番号がモデルごとに違うので） */
+function swapArrays(a, b) {
+  const t = a.splice(0, a.length, ...b);
+  b.length = 0;
+  b.push(...t);
+}
+
+/**
+ * 動かすほうを入れ替える。もう 1 体が原点に来るので、カメラも同じだけ動かして見た目をそのままにする
+ */
+function switchActor() {
+  if (!M || !P.M) return;
+  if (S.playing) stopPlay();
+  gizmo.detach();
+  TL.sel.clear();
+  const toNew = P.wrap.matrix.clone().invert();
+  [M, P.M] = [P.M, M];
+  [D, P.D] = [P.D, D];
+  for (const k of ACTOR_STATE) [S[k], P.st[k]] = [P.st[k], S[k]];
+  if (S.unity) [S.unity.path, P.st.unityPath] = [P.st.unityPath, S.unity.path];
+  swapArrays(undoStack, P.st.undo);
+  swapArrays(redoStack, P.st.redo);
+  [ownWrap, P.wrap] = [P.wrap, ownWrap];
+  S.second = !S.second;
+  ownWrap.position.set(0, 0, 0);
+  ownWrap.quaternion.identity();
+  ownWrap.updateMatrixWorld(true);
+  placePair();
+  refreshGhost();
+  camera.position.applyMatrix4(toNew);
+  orbit.target.applyMatrix4(toNew);
+  orbit.update();
+  docVer++;
+  buildBoneList();
+  buildShapeList();
+  buildMeshList();
+  buildMarkers();
+  refreshBreathUI();
+  TL.fit = true;
+  goFrame(S.frame);
+  attachGizmo();
+  refreshAll();
+  refreshWho();
+  refreshPairUI();
+  setStatus(`${S.second ? '2体目' : '1体目'}を動かす: ${M.name}  ${D.name}`);
 }
 
 function pairChanged() {
@@ -3920,29 +4055,44 @@ function pairChanged() {
   autoSavedVer = -1;
 }
 
+function refreshWho() {
+  $('bWho').style.display = P.M ? '' : 'none';
+  $('bWho').textContent = S.second ? '⇄ 2体目' : '⇄ 1体目';
+}
+
 function refreshPairUI() {
   const has = !!P.M;
   $('bPair').classList.toggle('on', has && P.show);
   $('paName').textContent = has
-    ? `相手役: ${P.M.name}　動き: ${P.motion || 'なし'}${P.motion ? `（${P.D.frameCount}F・${P.D.fps}fps${P.D.loop ? '・ループ' : ''}）` : ''}`
+    ? `相手役（${S.second ? '1体目' : '2体目'}）: ${P.M.name}　動き: ${P.D.name}（${P.D.frameCount}F・${P.D.fps}fps${P.D.loop ? '・ループ' : ''}）`
     : P.pending ? `相手役なし（${P.pending.model} を選ぶと、保存してあった置き場所と動きが戻ります）` : '相手役なし';
   $('paSame').disabled = !S.modelSrc;
-  for (const id of ['paDel', 'paShow', 'paMotion', 'paCopy', 'paStill', 'paX', 'paY', 'paZ', 'paYaw', 'paFace']) $(id).disabled = !has;
+  for (const id of ['paDel', 'paShow', 'paGhost', 'paMotion', 'paCopy', 'paStill', 'paX', 'paY', 'paZ', 'paYaw', 'paFace', 'paSwap', 'paPin', 'paLook']) $(id).disabled = !has;
+  refreshContactUI();
   $('paShow').checked = P.show;
+  $('paGhost').checked = P.ghost;
+  const pl = has ? otherPlace() : { x: 0, y: 0, z: 0, yaw: 0 };
   const put = (id, v) => { if (document.activeElement !== $(id)) $(id).value = v; };
-  put('paX', P.place.x); put('paY', P.place.y); put('paZ', P.place.z); put('paYaw', P.place.yaw);
+  put('paX', pl.x); put('paY', pl.y); put('paZ', pl.z); put('paYaw', pl.yaw);
+  // Unity は X が逆（モデルの単位はメートル）。1 体目を原点・回転 0 に置いたときの 2 体目
+  const u = P.place, n = v => Math.round(v * 1000) / 1000 + 0;
+  $('paUnity').textContent = has ? `Unityでは: 1体目を原点・回転0に置き、2体目を 位置 (${n(-u.x)}, ${n(u.y)}, ${n(u.z)})・回転Y ${n(-u.yaw)}° に置く` : '';
 }
 
-$('bPair').onclick = () => {
-  const pop = $('pairPop');
-  if (pop.style.display === 'flex') { pop.style.display = 'none'; return; }
+function openPairPop() {
   refreshPairUI();
   const r = $('bPair').getBoundingClientRect();
-  Object.assign(pop.style, { display: 'flex', left: Math.max(4, Math.min(r.left, innerWidth - 470)) + 'px', top: r.bottom + 4 + 'px' });
+  Object.assign($('pairPop').style, { display: 'flex', left: Math.max(4, Math.min(r.left, innerWidth - 560)) + 'px', top: r.bottom + 4 + 'px' });
+}
+$('bPair').onclick = () => {
+  if ($('pairPop').style.display === 'flex') $('pairPop').style.display = 'none';
+  else openPairPop();
 };
 document.addEventListener('pointerdown', e => {
   if (!e.target.closest('#pairPop, #bPair')) $('pairPop').style.display = 'none';
 });
+$('bWho').onclick = () => switchActor();
+$('paSwap').onclick = () => switchActor();
 $('paSame').onclick = () => { if (S.modelSrc) loadPair({ ...S.modelSrc, kind: 'same' }); };
 $('paFolder').onclick = () => $('paFolderIn').click();
 $('paFiles').onclick = () => $('paFilesIn').click();
@@ -3955,9 +4105,15 @@ $('paFolderIn').onchange = pairFilesPicked;
 $('paFilesIn').onchange = pairFilesPicked;
 $('paDel').onclick = () => { removePair(); setStatus('相手役を消しました'); };
 $('paShow').onchange = e => { P.show = e.target.checked; pairChanged(); };
+$('paGhost').onchange = e => { P.ghost = e.target.checked; refreshGhost(); pairChanged(); };
 $('paFace').onclick = () => facePair();
 for (const [id, k] of [['paX', 'x'], ['paY', 'y'], ['paZ', 'z'], ['paYaw', 'yaw']]) {
-  $(id).oninput = e => { const v = Number(e.target.value); if (Number.isFinite(v)) { P.place[k] = v; pairChanged(); } };
+  $(id).oninput = e => {
+    const v = Number(e.target.value);
+    if (!P.M || !Number.isFinite(v)) return;
+    setOtherPlace({ ...otherPlace(), [k]: v });
+    pairChanged();
+  };
   $(id).onchange = () => refreshPairUI();
 }
 $('paMotion').onclick = () => $('paMotionIn').click();
@@ -3975,11 +4131,167 @@ $('paMotionIn').onchange = async e => {
 };
 $('paCopy').onclick = () => {
   if (!P.M) return;
-  const missing = setPairMotion(projectData(), `${D.name}の写し`);
+  const missing = setPairMotion(docData(), `${D.name}の写し`);
   setStatus('今の動きを相手役に写しました' + (missing ? `  相手のモデルに無い骨・シェイプ ${missing}個` : ''));
 };
-$('paStill').onclick = () => { if (P.M) { P.D = newDocData(); P.motion = ''; pairChanged(); } };
+$('paStill').onclick = () => { if (P.M) { P.D = newDocData(); P.st.undo.length = P.st.redo.length = 0; pairChanged(); } };
 refreshPairUI();
+
+// ---------- くっつける: 手先・足先を、相手の骨に付けたままキーを打つ ----------
+
+/** 相手役の骨 i の、フレーム f での行列（今動かしているほうのワールド）。見た目どおり（Unity の再生の姿）で測る */
+function pairBoneWorld(i, f) {
+  let m;
+  asPair(() => {
+    poseAt(pairFrame(f), true);
+    if (S.unityView) applyUnityView();
+    m = M.bones[i].matrixWorld.clone();
+  });
+  return P.wrap.matrix.clone().multiply(m);
+}
+/** 相手役の目の間の位置（フレーム f、今動かしているほうのワールド） */
+function pairEyeWorld(f) {
+  let v;
+  asPair(() => {
+    poseAt(pairFrame(f), true);
+    if (S.unityView) applyUnityView();
+    v = M.human.Head != null ? eyePos() : null;
+  });
+  return v && v.applyMatrix4(P.wrap.matrix);
+}
+
+
+function startContactPick() {
+  if (!M || !P.M) return;
+  if (S.sel?.kind !== 'ik' && S.sel?.kind !== 'pole') { setStatus('先に、IKの手先か足先を選んでください（IKを入れて、手か足をクリック）', true); return; }
+  S.contactPick = S.sel.limb;
+  // 手先のギズモが、ちょうどクリックしたい所に重なるので外しておく
+  gizmo.detach();
+  $('pairPop').style.display = 'none';
+  setStatus(`${M.limbs[S.contactPick].label}をくっつける所を、相手の体でクリック（Escでやめる）`);
+}
+
+/** くっつける相手の骨をクリックで選ぶ（pick から） */
+function pickContact() {
+  const limb = S.contactPick;
+  S.contactPick = null;
+  attachGizmo();
+  if (!P.M || !M.limbs[limb]) return;
+  const other = P.M.meshes.filter(m => m.visible);
+  for (const m of other) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
+  const h = P.show ? raycaster.intersectObjects(other, false)[0] : null;
+  if (!h) { setStatus('相手の体に当たりませんでした。もう一度「選んだ手足 → 相手の体…」から', true); return; }
+  const bone = asPair(() => boneAtHit(h));
+  if (bone < 0) { setStatus('相手の骨が見つかりませんでした', true); return; }
+  // 今のフレームの、相手の骨と手先・足先の関係を覚える
+  const hand = M.bones[M.limbs[limb].c].matrixWorld.clone();
+  const off = pairBoneWorld(bone, S.frame).invert().multiply(hand);
+  const keys = allKeyFrames();
+  contact = { limb, bone, off, from: 0, to: D.frameCount, step: 1, rot: true, model: P.M, me: M };
+  // 範囲は、キーのある所全部（キーが 1 か所だけなら全体）
+  if (keys.length > 1) { contact.from = Math.min(S.frame, keys[0]); contact.to = Math.max(S.frame, keys[keys.length - 1]); }
+  refreshContactUI();
+  openPairPop();
+  setStatus(`${M.limbs[limb].label} → 相手の ${P.M.names[bone]}。範囲を決めて「キーを打つ」`);
+}
+
+function refreshContactUI() {
+  const ok = contact && contact.me === M && contact.model === P.M;
+  if (!ok) contact = null;
+  $('paPinRow').style.display = ok ? 'flex' : 'none';
+  $('paPinInfo').textContent = !ok ? '' : contact.look ? '視線 → 相手の顔' : `${M.limbs[contact.limb].label} → 相手の ${P.M.names[contact.bone]}`;
+  $('paRot').parentElement.style.display = ok && contact.look ? 'none' : '';
+  if (!ok) return;
+  $('paFrom').value = contact.from;
+  $('paTo').value = contact.to;
+  $('paStep').value = contact.step;
+  $('paRot').checked = contact.rot;
+}
+
+/** from〜to の step ごと（to は必ず）に、手先・足先を相手の骨に付けた姿勢を IK で解いてキーを打つ */
+/** 視線: 首と頭を相手の顔に向ける。範囲は今のキーのある所全部（1 か所だけなら全体） */
+function startLook() {
+  if (!M || !P.M) return;
+  if (M.human.Head == null || P.M.human.Head == null) { setStatus('頭の骨が見つかりません', true); return; }
+  const keys = allKeyFrames();
+  contact = { look: true, from: 0, to: D.frameCount, step: 1, model: P.M, me: M };
+  if (keys.length > 1) { contact.from = keys[0]; contact.to = keys[keys.length - 1]; }
+  refreshContactUI();
+  setStatus('視線を相手の顔へ。範囲を決めて「キーを打つ」');
+}
+
+/** フレームの並び: from〜to の step ごと（to は必ず） */
+function contactFrames() {
+  const from = clamp(Math.round(contact.from), 0, D.frameCount), to = clamp(Math.round(contact.to), from, D.frameCount);
+  const step = Math.max(1, Math.round(contact.step) || 1);
+  const frames = [];
+  for (let f = from; f <= to; f += step) frames.push(f);
+  if (frames[frames.length - 1] !== to) frames.push(to);
+  return frames;
+}
+
+function bakeLook() {
+  const frames = contactFrames();
+  const bones = [M.human.Neck, M.human.Head].filter(i => i != null);
+  pushUndo();
+  const out = [];
+  for (const f of frames) {
+    poseAt(f);
+    const eye = pairEyeWorld(f);
+    if (!eye) continue;
+    LOOK.target.position.copy(eye);
+    LOOK.target.updateMatrixWorld(true);
+    solveLook();
+    out.push([f, bones.map(i => [i, M.bones[i].quaternion.clone()])]);
+  }
+  for (const [f, list] of out) for (const [i, q] of list) insertKey(track(i).keys, { f, q, p: null });
+  docVer++;
+  markDirty();
+  goFrame(S.frame);
+  setStatus(`視線を相手の顔に向けて、${out.length}フレームにキーを打ちました`);
+}
+
+function bakeContact() {
+  if (!contact || contact.me !== M || contact.model !== P.M) return;
+  if (contact.look) { bakeLook(); return; }
+  const L = M.limbs[contact.limb];
+  const frames = contactFrames();
+  pushUndo();
+  // 解くのは全部、今のキーのままの姿から（打ったキーで次のフレームの解き方が変わらないように）。キーは最後にまとめて打つ
+  const out = [];
+  const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+  let miss = 0, missAt = -1;
+  for (const f of frames) {
+    poseAt(f);
+    pairBoneWorld(contact.bone, f).multiply(contact.off).decompose(p, q, sc);
+    L.target.position.copy(p);
+    L.target.quaternion.copy(contact.rot ? q : wq(M.bones[L.c]));
+    L.target.updateMatrixWorld(true);
+    L.pole.position.copy(defaultPole(L));
+    L.pole.updateMatrixWorld(true);
+    solveLimb(L);
+    const d = wp(M.bones[L.c]).distanceTo(p);
+    if (d > miss) { miss = d; missAt = f; }
+    out.push([f, [L.a, L.b, L.c].map(i => [i, M.bones[i].quaternion.clone(), M.bones[i].position.clone()])]);
+  }
+  for (const [f, list] of out) for (const [i, bq, bp] of list) insertKey(track(i).keys, { f, q: bq, p: hasPos(i) ? bp : null });
+  docVer++;
+  markDirty();
+  goFrame(S.frame);
+  // 届かないフレーム（腕・脚が伸び切る）は、そこまで伸ばしてキーを打つ。どれだけ足りないかを知らせる
+  const short = miss > M.size * 0.005;
+  setStatus(`${L.label}を相手の ${P.M.names[contact.bone]} にくっつけて、${frames.length}フレームにキーを打ちました` +
+    (short ? `  届かないフレームがあります（${missAt}Fで${(miss / M.size * 100).toFixed(1)}%（背の高さに対して）足りない。体を近づけてから打ち直してください）` : ''), short);
+}
+
+$('paPin').onclick = () => startContactPick();
+$('paLook').onclick = () => startLook();
+$('paPinX').onclick = () => { contact = null; refreshContactUI(); };
+$('paBake').onclick = () => bakeContact();
+$('paFrom').onchange = e => { if (contact) contact.from = Number(e.target.value) || 0; };
+$('paTo').onchange = e => { if (contact) contact.to = Number(e.target.value) || 0; };
+$('paStep').onchange = e => { if (contact) contact.step = Math.max(1, Number(e.target.value) || 1); };
+$('paRot').onchange = e => { if (contact) contact.rot = e.target.checked; };
 
 /** Unity が覚えていた編集用のデータ（または .anim から起こしたポーズ）を開く */
 function applyMotionJson(obj, fileName) {
@@ -4279,17 +4591,20 @@ const ACTIONS = [
   ['ik', 'IKの入 / 切', ''], ['pin', '固定の入 / 切', ''], ['falloff', '伝染の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
   ['onion', 'オニオンの入 / 切', ''], ['boneView', '骨の表示を切り替え', ''],
   ['mirrorAll', '全身を反転', ''], ['mirrorSel', '選んだ骨を反対側へ', ''],
+  ['swapActor', '動かすアバターを入れ替え（相手役）', 'KeyQ'],
 ];
 const RUN = {
   move: () => setMode('translate'), rotate: () => setMode('rotate'), space: () => $('bSpace').click(),
   key: () => keySelected(), keyAll: () => keyAll(), deleteKey: () => deleteKeys(),
   prevFrame: () => goFrame(S.frame - 1), nextFrame: () => goFrame(S.frame + 1), prevKey: () => jumpKey(-1), nextKey: () => jumpKey(1),
-  play: () => $('bPlay').click(), focus: () => focusSelected(), deselect: () => { TL.sel.clear(); select(null); },
+  play: () => $('bPlay').click(), focus: () => focusSelected(),
+  deselect: () => { if (S.contactPick != null) { S.contactPick = null; attachGizmo(); setStatus('くっつけるのをやめました'); return; } TL.sel.clear(); select(null); },
   undo: () => undo(), redo: () => redo(), copy: () => (TL.sel.size ? copyKeys() : copyPose()), paste: () => (lastCopy === 'keys' ? pasteKeys() : pastePose(false)), pasteMirror: () => pastePose(true),
   save: () => save(false), saveAs: () => save(true), saveProj: () => saveProject(), openProj: () => $('bOpen').click(), newDoc: () => newDoc(),
   ik: () => $('bIK').click(), pin: () => $('bPin').click(), falloff: () => $('bFalloff').click(), autoKey: () => $('bAuto').click(),
   onion: () => $('bOnion').click(), boneView: () => $('bBones').click(),
   mirrorAll: () => mirrorPose('all'), mirrorSel: () => mirrorPose('sel'),
+  swapActor: () => switchActor(),
 };
 // 文字を打っている最中でも効くもの
 const WHILE_TYPING = new Set(['save', 'saveAs', 'saveProj', 'openProj']);
@@ -4458,7 +4773,7 @@ function renderHelp() {
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
   $('helpNote').textContent = (S.sample ? '「.anim保存」で、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '「.anim保存」で、Unityのプロジェクトに.animができる') +
     '。作りかけは自動で残り、次に開くと続きから。「プロジェクト保存」で.sismotionにも残せる' +
-    '。「相手」で2人目のアバターを出して、その.sismotionを一緒に再生できる（見るだけ。キーを打つのは今のアバター）';
+    '。「相手」で2人目のアバターを出して一緒に再生できる。Qか相手の体のクリックで、動かすほうが入れ替わる。「くっつける」で手足を相手の体に付けたままキーを打てる';
 }
 
 window.addEventListener('keydown', e => {
@@ -4957,7 +5272,10 @@ async function loadDefaultModel() {
   if (!files.some(f => /\.fbx$/i.test(f.name))) { say('モデルを読み込めませんでした'); return; }
   await loadModelFiles(files, unity ? unity.texByMat : null, unity ? unity.body : null);
   // 相手役の「同じアバター」は、同じファイルからもう1体作る
-  if (M) S.modelSrc = { files, texByMat: unity ? unity.texByMat : null, body: unity ? unity.body : null, parts: unity?.parts || null };
+  if (M) {
+    S.modelSrc = { files, texByMat: unity ? unity.texByMat : null, body: unity ? unity.body : null, parts: unity?.parts || null };
+    S.src = { ...S.modelSrc, kind: 'same' };
+  }
   if (unity?.parts) await loadParts(unity.parts);
   if (unity) await openFromUnity(unity.man);
   // Unity を通さないページは、茜犬の見本（モデルの数値が入っているので、ブラウザだけで .anim を書ける）
@@ -4972,7 +5290,7 @@ loadDefaultModel();
 
 // 確認用（コンソールから触る）
 window.MT = {
-  THREE, S, get D() { return D; }, get M() { return M; }, get pair() { return P; }, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
+  THREE, S, get D() { return D; }, get M() { return M; }, get pair() { return P; }, get contact() { return contact; }, pairBoneWorld, pairEyeWorld, switchActor, bakeContact, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
   mirrorPose, copyPose, pastePose, select, undo, redo, pick, boneAtHit, newDoc, keyAll, projectData, applyProject, allKeyFrames, constrainBone, camera, gizmo,
   applyUnityView, restoreUnityView, analyzeLimb, orbit, get settings() { return CFG; },
   TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY, buildAnim, buildAnimModel, animFrame,
