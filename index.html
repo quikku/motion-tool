@@ -113,6 +113,17 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 .pop .prow input[type=number] { width: 58px; }
 .pop { position: fixed; display: none; gap: 5px; align-items: center; background: var(--panel2); border: 1px solid #50545c; border-radius: 4px;
   padding: 6px 8px; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.4); white-space: nowrap; }
+#handPad { position: absolute; right: 8px; top: 8px; width: 190px; background: rgba(37,39,43,.92); border: 1px solid var(--line);
+  border-radius: 6px; display: none; z-index: 4; touch-action: none; }
+#handPad .hbar { display: flex; gap: 3px; align-items: center; padding: 3px 4px 0; }
+#handPad .hbar button { height: 20px; padding: 0 6px; }
+#handPad .hbar span { flex: 1; color: var(--dim); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#handPad svg { display: block; width: 100%; height: auto; }
+#handPad .palm { cursor: ns-resize; }
+#handPad .zone { stroke: transparent; stroke-width: 15; stroke-linecap: round; cursor: ns-resize; }
+#handPad .zone.side { cursor: ew-resize; }
+#handPad .zone:hover + .mark, #handPad .zone.drag + .mark { stroke: #fff; }
+#handPad .mark { pointer-events: none; stroke-linecap: round; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -146,6 +157,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bPose">ポーズ ▾</button>
     <button id="bBones" title="骨の表示">骨: 人型</button>
     <button id="bOnion" title="前後のキーの骨を重ねる">オニオン</button>
+    <button id="bHand" title="手首か指を選んだとき、指を曲げる・開くパッドを出す">手パッド</button>
     <button id="bBreath">呼吸</button>
     <button id="bVideo">動画</button>
     <button id="bPair" title="2人目のアバター（相手役）を出して、同じタイムラインで一緒に再生する">相手 ▾</button>
@@ -164,6 +176,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
   </div>
   <div id="view">
     <div id="empty"><div>読み込み中</div></div>
+    <div id="handPad"><div class="hbar"><button id="hpL">左手</button><button id="hpR">右手</button><span id="hpInfo"></span></div><svg id="hpSvg" viewBox="0 0 214 214"></svg></div>
   </div>
   <div id="vpane" style="display:none">
     <div id="vresize"></div>
@@ -1030,6 +1043,7 @@ const parentRestInv = i => M.restWQ[i].clone().multiply(M.restQ[i].clone().inver
 const toParentFrame = (i, v) => v.clone().applyQuaternion(parentRestInv(i)).normalize();
 
 function buildDof() {
+  M.handRig = null;
   M.dof = new Map();
   M.dofWorld = new Map(); // 確認用: 元のポーズでのワールドの軸
   const H = M.human;
@@ -3143,6 +3157,7 @@ function updateButtons() {
   $('bFalloff').classList.toggle('on', S.falloff);
   $('falloffR').disabled = !S.falloff;
   $('bOnion').classList.toggle('on', S.onion);
+  $('bHand').classList.toggle('on', !!S.handPad);
   $('bBones').textContent = '骨: ' + { human: '人型', all: 'すべて', none: 'なし' }[S.boneView];
   $('bPlay').textContent = S.playing ? '■' : '▶';
   $('bBreath').classList.toggle('on', D.breath.on);
@@ -4935,6 +4950,7 @@ function renderHelp() {
   add('ホイール', '寄る・引く');
   add('右クリック', 'その場所のメッシュ（服など）を隠す。「表示」タブでも切り替え');
   add('緑の四角', 'ルート。全体の移動と回転（腰から下がまとめて動く）');
+  add('手パッド', '手首か指を選ぶと右上に出る。赤い所を縦にドラッグで関節を曲げる（Shiftで指全体、手のひらで4本まとめて）、青い所を横にドラッグで指を開く。クリックでその骨を選ぶ');
   for (const [id, label] of ACTIONS) if (CFG.keys[id]) add(keyLabel(id), label);
   add('目盛り', 'ドラッグでフレーム、右端の印で長さ、ホイールで拡大、ダブルクリックで全体');
   add('キー', 'ドラッグで移動、何もない所のドラッグで範囲選択、Shiftで足す、右クリックでつなぎ方');
@@ -5324,11 +5340,301 @@ function constrainBone(i) {
   return a || b;
 }
 
+// ---------- 手のパッド（指を、手の絵のドラッグで曲げる・開く） ----------
+
+/**
+ * 赤い所を縦にドラッグすると、その関節が曲がる（Shift で指全体、手のひらで親指以外の 4 本をまとめて）。
+ * 青い所を横にドラッグすると、指の付け根が開く・閉じる。クリックするとその骨を選ぶ。
+ * 絵は左手の甲（親指が右）。右手は左右を反転して描く。
+ */
+const FINGERS = ['Thumb', 'Index', 'Middle', 'Ring', 'Little'];
+const JOINTS = ['Proximal', 'Intermediate', 'Distal'];
+const FINGER_JA = { Thumb: '親指', Index: '人差し指', Middle: '中指', Ring: '薬指', Little: '小指' };
+const JOINT_JA = { Proximal: '付け根', Intermediate: '第2関節', Distal: '第1関節' };
+/** 絵の指（左手の甲、親指が右）: 付け根・指先・太さ。関節の印は付け根から指先までの割合 t の所 */
+const HAND_DRAW = {
+  Little: { base: [50, 114], tip: [34, 60], w: 15 },
+  Ring: { base: [76, 102], tip: [70, 38], w: 17 },
+  Middle: { base: [102, 98], tip: [104, 26], w: 18 },
+  Index: { base: [128, 102], tip: [138, 38], w: 17 },
+  Thumb: { base: [146, 162], tip: [184, 114], w: 18 },
+};
+const JOINT_T = { Proximal: 0.04, Intermediate: 0.42, Distal: 0.72 };
+const THUMB_T = { Proximal: 0.02, Intermediate: 0.44, Distal: 0.74 };
+/** 上限（度）。曲げは手のひらの側が正、開きは親指の側が正 */
+const HAND_RANGE = {
+  bend: { Proximal: [-25, 90], Intermediate: [-5, 110], Distal: [-5, 85] },
+  thumbBend: { Proximal: [-25, 50], Intermediate: [-15, 70], Distal: [-15, 85] },
+  spread: { Thumb: [-30, 60], Index: [-25, 25], Middle: [-25, 25], Ring: [-25, 25], Little: [-35, 25] },
+};
+
+S.handPad = (() => { try { return localStorage.getItem('mt.handPad') !== '0'; } catch (e) { return true; } })();
+const HP = { side: null, shown: '', drag: null };
+
+/**
+ * 指の骨ごとの、曲げる・開く向き（親の骨の元のポーズでの向き）。
+ * 手のひらの向きは人差し指と小指の付け根から決める（T ポーズでも A ポーズでも、手のひらは下を向いている）。
+ * 第 2・第 3 関節は自由度のヒンジのまま。付け根は、骨の向き dP・曲げて指先が進む向き mP・開いて進む向き sP の 3 つ
+ */
+function handRig(side) {
+  if (!M.handRig) M.handRig = {};
+  if (side in M.handRig) return M.handRig[side];
+  const H = M.human, hand = H[side + 'Hand'], ip = H[side + 'IndexProximal'], lp = H[side + 'LittleProximal'] ?? H[side + 'RingProximal'];
+  let rig = null;
+  if (hand != null && ip != null && lp != null) {
+    const P = M.restWP;
+    const dirOf = i => {
+      const c = M.children[i].find(k => P[k].distanceToSquared(P[i]) > 1e-10);
+      return (c != null ? P[c].clone().sub(P[i]) : P[i].clone().sub(P[M.parent[i]])).normalize();
+    };
+    const toThumb = P[ip].clone().sub(P[lp]).normalize();
+    const palm = P[ip].clone().sub(P[hand]).cross(P[lp].clone().sub(P[hand])).normalize();
+    if (palm.y > 0) palm.negate();
+    rig = {};
+    for (const f of FINGERS) {
+      rig[f] = {};
+      const target = f === 'Thumb' ? palm.clone().sub(toThumb).normalize() : palm;
+      for (const g of JOINTS) {
+        const i = H[side + f + g];
+        if (i == null) continue;
+        const d = dirOf(i), dw = M.dofWorld?.get(i);
+        if (dw?.kind === 'hinge' && g !== 'Proximal') {
+          const h = dw.hinge.clone();
+          if (h.clone().cross(d).dot(target) < 0) h.negate();
+          rig[f][g] = { i, kind: 'hinge', hP: toParentFrame(i, h), axisP: M.dof.get(i).axis };
+          continue;
+        }
+        // 付け根: 曲げの軸は第 2 関節のヒンジにそろえる（無ければ、指の付け根を結ぶ線か手のひらの法線）
+        const next = M.dofWorld?.get(H[side + f + 'Intermediate']);
+        const hint = next?.kind === 'hinge' ? next.hinge : f === 'Thumb' ? palm : toThumb;
+        const m = hint.clone().cross(d);
+        if (m.lengthSq() < 1e-8) continue;
+        m.normalize();
+        if (m.dot(target) < 0) m.negate();
+        const s = d.clone().cross(m);
+        if (s.dot(toThumb) < 0) s.negate();
+        rig[f][g] = { i, kind: 'swing', dP: toParentFrame(i, d), mP: toParentFrame(i, m), sP: toParentFrame(i, s) };
+      }
+    }
+  }
+  M.handRig[side] = rig;
+  return rig;
+}
+
+/** 関節の今の曲げと開き（ラジアン） */
+function jointAngles(J) {
+  const delta = M.bones[J.i].quaternion.clone().multiply(M.restQ[J.i].clone().invert());
+  if (J.kind === 'hinge') return { bend: hingeAngle(delta, J.axisP, J.hP), spread: 0 };
+  const v = J.dP.clone().applyQuaternion(delta);
+  const x = v.dot(J.dP), y = clamp(v.dot(J.mP), -1, 1), z = v.dot(J.sP);
+  if (x >= 0) return { bend: Math.asin(y), spread: Math.atan2(z, x) };
+  return { bend: Math.sign(y || 1) * (Math.PI - Math.asin(Math.abs(y))), spread: Math.atan2(-z, -x) };
+}
+
+/** 関節を曲げと開きの角度にする。付け根は骨の軸まわりにねじらない（自由度と同じ） */
+function setJointAngles(J, bend, spread) {
+  const b = M.bones[J.i];
+  let q;
+  if (J.kind === 'hinge') q = axisAngleQ(J.hP, bend);
+  else {
+    const v = J.dP.clone().multiplyScalar(Math.cos(bend) * Math.cos(spread))
+      .addScaledVector(J.sP, Math.cos(bend) * Math.sin(spread)).addScaledVector(J.mP, Math.sin(bend)).normalize();
+    q = new THREE.Quaternion().setFromUnitVectors(J.dP, v);
+  }
+  b.quaternion.copy(q.multiply(M.restQ[J.i])).normalize();
+  b.updateMatrixWorld(true);
+}
+
+const svgEl = (tag, attrs, parent) => {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+};
+
+function buildHandPad() {
+  const svg = $('hpSvg');
+  svg.innerHTML = '';
+  const root = svgEl('g', {}, svg);
+  HP.root = root;
+  const line = (a, b, attrs) => svgEl('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], ...attrs }, root);
+  const fg = '#d9dbe0', inner = '#34373d';
+  for (const f of FINGERS) { const F = HAND_DRAW[f]; line(F.base, F.tip, { stroke: fg, 'stroke-width': F.w + 5, 'stroke-linecap': 'round' }); }
+  const palm = svgEl('path', { d: 'M42 112 Q40 162 58 206 L134 206 Q140 188 158 174 L146 150 Q142 126 140 106 Q100 86 42 112 Z',
+    fill: inner, stroke: fg, 'stroke-width': 2.5, class: 'palm' }, root);
+  svgEl('title', {}, palm).textContent = '縦にドラッグ: 親指以外の4本をまとめて曲げる';
+  palm.dataset.zone = 'palm';
+  for (const f of FINGERS) { const F = HAND_DRAW[f]; line(F.base, F.tip, { stroke: inner, 'stroke-width': F.w, 'stroke-linecap': 'round', 'pointer-events': 'none' }); }
+  HP.zones = [];
+  for (const f of FINGERS) {
+    const F = HAND_DRAW[f];
+    const ax = [F.tip[0] - F.base[0], F.tip[1] - F.base[1]], len = Math.hypot(ax[0], ax[1]);
+    const dir = [ax[0] / len, ax[1] / len];
+    // 指に直交する向き（絵の右、親指の側を正）
+    const u = dir[1] < 0 ? [-dir[1], dir[0]] : [dir[1], -dir[0]];
+    const at = (t, k) => [F.base[0] + ax[0] * t + u[0] * k, F.base[1] + ax[1] * t + u[1] * k];
+    const zone = (a, b, color, data, title, side) => {
+      const z = line(a, b, { class: 'zone' + (side ? ' side' : '') });
+      z.dataset.zone = data;
+      svgEl('title', {}, z).textContent = title;
+      const mk = side
+        ? svgEl('path', { class: 'mark', fill: 'none', stroke: color, 'stroke-width': 3, 'stroke-linejoin': 'round',
+          d: arrowPath(a, b) }, root)
+        : line(a, b, { class: 'mark', stroke: color, 'stroke-width': 4.5 });
+      HP.zones.push({ el: z, mark: mk, data });
+    };
+    const T = f === 'Thumb' ? THUMB_T : JOINT_T;
+    for (const g of JOINTS) {
+      const h = F.w / 2 + 1, t = T[g];
+      zone(at(t, -h), at(t, h), '#e0453c', f + ':' + g, `${FINGER_JA[f]}の${JOINT_JA[g]}: 縦にドラッグで曲げる（Shiftで指全体）、クリックで選ぶ`);
+    }
+    const tt = 1 + 13 / len, h = F.w / 2 + 7;
+    zone(at(tt, -h), at(tt, h), '#3d8bff', f + ':spread', `${FINGER_JA[f]}: 横にドラッグで開く・閉じる`, true);
+  }
+  for (const z of HP.zones) z.el.parentNode.appendChild(z.el), z.el.parentNode.appendChild(z.mark); // 印は手の上に、当たりのすぐ後ろに置く
+}
+function arrowPath(a, b) {
+  const d = [b[0] - a[0], b[1] - a[1]], l = Math.hypot(d[0], d[1]), u = [d[0] / l * 5, d[1] / l * 5], n = [-u[1], u[0]];
+  const head = (p, s) => `M${p[0] - s * u[0] + n[0]} ${p[1] - s * u[1] + n[1]} L${p[0]} ${p[1]} L${p[0] - s * u[0] - n[0]} ${p[1] - s * u[1] - n[1]}`;
+  return `M${a[0]} ${a[1]} L${b[0]} ${b[1]} ${head(b, 1)} ${head(a, -1)}`;
+}
+
+/** 選んでいる物が手首か指（か手先の IK）なら、その側 */
+function handSideOfSel() {
+  if (!M || !S.sel) return null;
+  if (S.sel.kind === 'ik') { const k = M.limbs[S.sel.limb]?.key; return k === 'LeftHand' ? 'Left' : k === 'RightHand' ? 'Right' : null; }
+  if (S.sel.kind !== 'bone') return null;
+  for (const [hn, i] of Object.entries(M.human)) {
+    if (i !== S.sel.i) continue;
+    const m = /^(Left|Right)(Hand|Thumb|Index|Middle|Ring|Little)/.exec(hn);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** パッドを出す・隠す（描くたびに見るが、変わったときだけ書き換える） */
+function syncHandPad() {
+  const side = !HP.drag && S.handPad && M && !S.playing ? handSideOfSel() : HP.drag ? HP.side : null;
+  const rig = side ? handRig(side) : null;
+  const key = rig ? side : '';
+  if (key === HP.shown) return;
+  HP.shown = key;
+  $('handPad').style.display = key ? 'block' : 'none';
+  if (!key) return;
+  if (!HP.root) buildHandPad();
+  HP.side = side;
+  HP.root.setAttribute('transform', side === 'Right' ? 'translate(214 0) scale(-1 1)' : '');
+  $('hpL').classList.toggle('on', side === 'Left');
+  $('hpR').classList.toggle('on', side === 'Right');
+  for (const z of HP.zones) {
+    const [f, g] = z.data.split(':');
+    const ok = !!rig[f]?.[g === 'spread' ? 'Proximal' : g];
+    z.el.style.display = z.mark.style.display = ok ? '' : 'none';
+  }
+  $('hpInfo').textContent = '';
+}
+
+/** ドラッグで動かす関節。sym のときは反対の手の同じ関節も */
+function handTargets(zone, shift) {
+  const [f, g] = zone === 'palm' ? [null, 'all'] : zone.split(':');
+  const spread = g === 'spread';
+  const pick = rig => {
+    if (!rig) return [];
+    const fs = f ? [f] : FINGERS.filter(x => x !== 'Thumb');
+    const gs = spread ? ['Proximal'] : g === 'all' || shift ? JOINTS : [g];
+    const out = [];
+    for (const x of fs) for (const y of gs) if (rig[x]?.[y]) out.push({ f: x, g: y, J: rig[x][y] });
+    return out;
+  };
+  const list = pick(handRig(HP.side));
+  if (S.sym) for (const t of pick(handRig(HP.side === 'Left' ? 'Right' : 'Left'))) list.push(t);
+  return { spread, whole: !spread && (g === 'all' || shift), list: list.map(t => ({ ...t, start: jointAngles(t.J) })) };
+}
+
+$('hpSvg').addEventListener('pointerdown', e => {
+  const zone = e.target.dataset?.zone;
+  if (!zone || e.button !== 0 || !M || S.playing) return;
+  e.preventDefault();
+  const el = e.target;
+  // 絵の上の進む向き: 曲げは指先から付け根へ（手のひらは下へ）、開きは親指の側
+  let dir = [0, 1];
+  if (zone !== 'palm') {
+    const [f, g] = zone.split(':'), F = HAND_DRAW[f];
+    const ax = [F.base[0] - F.tip[0], F.base[1] - F.tip[1]], l = Math.hypot(ax[0], ax[1]);
+    dir = g === 'spread' ? [ax[1] / l, -ax[0] / l] : [ax[0] / l, ax[1] / l];
+    if (g === 'spread' && dir[0] < 0) dir = [-dir[0], -dir[1]];
+  }
+  HP.drag = { zone, el, x: e.clientX, y: e.clientY, dir, moved: false, ...handTargets(zone, e.shiftKey) };
+  el.classList.add('drag');
+  $('hpSvg').setPointerCapture(e.pointerId);
+});
+$('hpSvg').addEventListener('pointermove', e => {
+  const d = HP.drag;
+  if (!d) return;
+  const dx = (e.clientX - d.x) * (HP.side === 'Right' ? -1 : 1), dy = e.clientY - d.y;
+  if (!d.moved) {
+    if (Math.hypot(dx, dy) < 3) return;
+    d.moved = true;
+    pushUndo();
+  }
+  const deg = dx * d.dir[0] + dy * d.dir[1];
+  const rad = Math.PI / 180;
+  let info = '';
+  for (const t of d.list) {
+    const r = d.spread ? HAND_RANGE.spread[t.f] : (t.f === 'Thumb' ? HAND_RANGE.thumbBend : HAND_RANGE.bend)[t.g];
+    const cur = d.spread ? t.start.spread : t.start.bend;
+    let v = cur + deg * rad;
+    // 上限の外から始めたときは、そこまでは許す
+    if (S.limits !== false) v = clamp(v, Math.min(r[0] * rad, cur), Math.max(r[1] * rad, cur));
+    if (d.spread) setJointAngles(t.J, t.start.bend, v);
+    else setJointAngles(t.J, v, t.start.spread);
+    S.edited.add(t.J.i);
+    if (!info) info = `${d.zone === 'palm' ? '4本' : FINGER_JA[t.f]}${d.spread ? 'の開き' : d.whole ? '' : 'の' + JOINT_JA[t.g]} ${Math.round(v / rad)}°`;
+  }
+  $('hpInfo').textContent = info;
+  updateUnkeyed();
+});
+const endHandDrag = () => {
+  const d = HP.drag;
+  if (!d) return;
+  HP.drag = null;
+  d.el.classList.remove('drag');
+  if (!d.moved) {
+    // クリック: その骨を選ぶ
+    if (d.zone === 'palm') return;
+    const [f, g] = d.zone.split(':'), J = handRig(HP.side)?.[f]?.[g === 'spread' ? 'Proximal' : g];
+    if (J) select({ kind: 'bone', i: J.i });
+    return;
+  }
+  if (S.autoKey && S.edited.size) keyBones([...S.edited]);
+  else { refreshKeysUI(); markDirty(); }
+};
+$('hpSvg').addEventListener('pointerup', endHandDrag);
+$('hpSvg').addEventListener('pointercancel', endHandDrag);
+$('handPad').addEventListener('contextmenu', e => e.preventDefault());
+
+/** 左手・右手のボタン: 反対の手の、同じ所を選ぶ */
+const handSwitch = side => () => {
+  if (!M || !S.sel || HP.side === side) return;
+  if (S.sel.kind === 'ik') {
+    const L = M.limbs.findIndex(l => l.key === side + 'Hand');
+    if (L >= 0) select({ kind: 'ik', limb: L });
+  } else if (S.sel.kind === 'bone') select({ kind: 'bone', i: partnerOf(S.sel.i) });
+};
+$('hpL').onclick = handSwitch('Left');
+$('hpR').onclick = handSwitch('Right');
+$('bHand').onclick = () => {
+  S.handPad = !S.handPad;
+  try { localStorage.setItem('mt.handPad', S.handPad ? '1' : '0'); } catch (e) { /* 覚えられなくてもいい */ }
+  updateButtons();
+  if (S.handPad && !handSideOfSel()) setStatus('手首か指を選ぶと、手のパッドが出ます');
+};
+
 refreshBreathUI();
 refreshVideoUI();
 
 // 確認用（コンソールから触る）
-window.MTP = { V, applyLimits, limitOf, poseAt, applyBreath, breathWave, breathCycle, openVideo, LOOK, solveLook, syncLook, mirrorBoneEdit, mirrorLimbEdit, eyePos, headForward };
+window.MTP = { V, applyLimits, limitOf, poseAt, applyBreath, breathWave, breathCycle, openVideo, LOOK, solveLook, syncLook, mirrorBoneEdit, mirrorLimbEdit, eyePos, headForward, handRig, jointAngles, setJointAngles, HP };
 
 // ================================================================
 //  ループ
@@ -5353,6 +5659,7 @@ function tick(now) {
   updatePair();
   scene.updateMatrixWorld();
   if (M) updateMarkers();
+  syncHandPad();
   const view = M && S.unityView ? applyUnityView() : null;
   renderer.render(scene, camera);
   restoreUnityView(view);
