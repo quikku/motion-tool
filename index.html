@@ -108,6 +108,9 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 #vEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); pointer-events: none; }
 #vSeek { flex: 1; min-width: 60px; padding: 0; height: 16px; accent-color: var(--accent); background: none; border: 0; }
 #vTime { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pop.col { flex-direction: column; align-items: stretch; }
+.pop .prow { display: flex; gap: 5px; align-items: center; }
+.pop .prow input[type=number] { width: 58px; }
 .pop { position: fixed; display: none; gap: 5px; align-items: center; background: var(--panel2); border: 1px solid #50545c; border-radius: 4px;
   padding: 6px 8px; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.4); white-space: nowrap; }
 </style>
@@ -145,6 +148,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bOnion" title="前後のキーの骨を重ねる">オニオン</button>
     <button id="bBreath">呼吸</button>
     <button id="bVideo">動画</button>
+    <button id="bPair" title="2人目のアバター（相手役）を出して、同じタイムラインで一緒に再生する">相手 ▾</button>
     <button id="bSettings" title="マウスとキーの割り当て">設定</button>
     <button id="bHelp">?</button>
     <span id="status"></span>
@@ -195,6 +199,15 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 </div>
 <div id="ctx" class="menu"></div>
 <div id="breathPop" class="pop"><label><input id="brOn" type="checkbox">入れる</label><span>周期</span><input id="brPeriod" type="number" min="0.5" max="60" step="0.5"><span>秒</span><span>強さ</span><input id="brAmp" type="number" min="0" max="500" step="10"><span>%</span><span id="brNote" style="color:var(--dim)"></span></div>
+<div id="pairPop" class="pop col">
+  <div class="prow"><span id="paName" style="color:var(--dim)"></span></div>
+  <div class="prow"><span>出す</span><button id="paSame" title="今のアバターをもう1体出す">同じアバター</button><button id="paFolder" title="FBXと画像が入ったフォルダを選ぶ">フォルダから…</button><button id="paFiles" title="FBXと画像（と .motiontool.json）をまとめて選ぶ">ファイルから…</button><button id="paDel">消す</button></div>
+  <div class="prow"><label><input id="paShow" type="checkbox">見せる</label><span class="sep"></span><span>動き</span><button id="paMotion" title="相手役の .sismotion を開く（同じタイムラインで一緒に再生する）">.sismotion…</button><button id="paCopy" title="今のアバターのキーを、骨の名前で相手役に写す">今の動きを写す</button><button id="paStill" title="相手役の動きを外して、元のポーズにする">動きなし</button></div>
+  <div class="prow"><span>位置</span><span>X</span><input id="paX" type="number" step="0.01"><span>Y</span><input id="paY" type="number" step="0.01"><span>Z</span><input id="paZ" type="number" step="0.01"><span>向き</span><input id="paYaw" type="number" step="5"><span>°</span><button id="paFace" title="今のアバターの正面に、こちらを向けて置く">向かい合わせ</button></div>
+  <input id="paFolderIn" type="file" webkitdirectory multiple hidden>
+  <input id="paFilesIn" type="file" multiple hidden accept=".fbx,.json,.png,.jpg,.jpeg,.tga,.bmp,.webp">
+  <input id="paMotionIn" type="file" accept=".sismotion,application/json" hidden>
+</div>
 <div id="ask" class="modal"><div class="box"><h3></h3><input type="text" spellcheck="false"><div class="row"><button class="no">やめる</button><button class="ok">OK</button></div></div></div>
 <div id="help" class="modal"><div class="box">
   <h3>操作</h3>
@@ -278,7 +291,7 @@ const mirrorV = v => new THREE.Vector3(-v.x, v.y, v.z);
 // ================================================================
 
 let M = null; // モデル
-const D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } };
+let D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } };
 let docVer = 0;
 const S = {
   /** Unityから開いたとき: { path: 保存先の.anim（まだ無ければnull）, dir: 保存先の候補のフォルダ }。 */
@@ -319,8 +332,21 @@ const MISSING_TEX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAA
  * texByMat: マテリアル名（小文字）→ 画像。Unityから開いたときに渡される。無ければ、画像の名前から探す。
  */
 async function loadModelFiles(files, texByMat = null, body = null) {
+  const r = await parseModelFiles(files, texByMat, body);
+  if (!r) return false;
+  if (r.error) { setStatus('FBXを読めません: ' + r.error, true); return true; }
+  setModel(r.group, r.name, r.info);
+  // 保存のときに送る元のポーズは FBX のまま（Unity は FBX と比べ、FBX の元のポーズに当てはめる）
+  if (M && r.fileRest) M.fileRest = M.names.map((n, i) => r.fileRest.get(n) ?? { p: M.restWP[i], q: M.restWQ[i] });
+  applyBodyShapes(body);
+  if (r.missing.length) setStatus($('status').textContent + `  テクスチャなし: ${r.missing.join(', ')}`);
+  return true;
+}
+
+/** FBX を読んで、シーンに入れる前のモデルにする。FBX が無ければ null、読めなければ { error } */
+async function parseModelFiles(files, texByMat = null, body = null) {
   const fbx = files.find(f => /\.fbx$/i.test(f.name));
-  if (!fbx) return false;
+  if (!fbx) return null;
   const images = new Map();
   for (const f of files) if (IMAGE_RE.test(f.name)) images.set(f.name.toLowerCase(), f);
   // Unity の「HTML 用に書き出す」で FBX から作ったモデルの情報（人型の骨の対応と、マッスルの回転軸）
@@ -351,20 +377,14 @@ async function loadModelFiles(files, texByMat = null, body = null) {
     group = new FBXLoader(manager).parse(buffer, '');
   } catch (e) {
     console.error(e);
-    setStatus('FBXを読めません: ' + e.message, true);
-    return true;
+    return { error: e.message };
   }
   // FBXLoader は軸の設定（Z-up など）を見ないので、Unity と同じく Y-up・+Z 向きに回す
   group.quaternion.setFromRotationMatrix(axisConversion(readAxes(buffer)));
   if (loading) await Promise.race([done, new Promise(res => setTimeout(res, 4000))]);
   const missing = fixMaterials(group, images, urls, texByMat || new Map());
   const fileRest = applyBodyBones(group, body);
-  setModel(group, fbx.name, info);
-  // 保存のときに送る元のポーズは FBX のまま（Unity は FBX と比べ、FBX の元のポーズに当てはめる）
-  if (M && fileRest) M.fileRest = M.names.map((n, i) => fileRest.get(n) ?? { p: M.restWP[i], q: M.restWQ[i] });
-  applyBodyShapes(body);
-  if (missing.length) setStatus($('status').textContent + `  テクスチャなし: ${missing.join(', ')}`);
-  return true;
+  return { group, name: fbx.name, info, fileRest, missing };
 }
 
 /**
@@ -392,14 +412,14 @@ function applyBodyBones(group, body) {
   return before;
 }
 /** シーンのアバターのシェイプキーの値を、キーが無いときの値にする（.anim には書かないので、Unity の再生でもシーンの値のまま） */
-function applyBodyShapes(body) {
+function applyBodyShapes(body, quiet = false) {
   if (!M) return;
   M.shapeBase = new Map();
   for (const s of body?.shapes || []) {
     const id = `${s.path}|${s.name}`;
     if (M.shapeById.has(id)) M.shapeBase.set(id, s.value);
   }
-  if (M.shapeBase.size) goFrame(S.frame);
+  if (M.shapeBase.size && !quiet) goFrame(S.frame);
 }
 
 /**
@@ -409,10 +429,20 @@ function applyBodyShapes(body) {
  */
 async function loadParts(parts) {
   if (!M || !parts) return;
-  const hidden = hideSceneMeshes(parts.hide || []);
+  addParts(parts, await fetchParts(parts));
+}
+/** 衣装などのメッシュの中身（Unity のサーバーから）。読めなかった物は null */
+function fetchParts(parts) {
+  return Promise.all((parts.meshes || []).map(async pm => {
+    try { const r = await fetch(pm.url); return r.ok ? await r.arrayBuffer() : null; } catch (e) { return null; }
+  }));
+}
+/** quiet: 相手役のとき（左の一覧と状態の表示は今のアバターのままにする） */
+function addParts(parts, bufs, quiet = false) {
+  const hidden = hideSceneMeshes(parts.hide || [], quiet);
   if (!parts.meshes?.length) return;
   const fit = fitUnitySpace(parts);
-  if (!fit) { setStatus($('status').textContent + '  衣装などを合わせられません（素体の骨が見つからない）', true); return; }
+  if (!fit) { if (!quiet) setStatus($('status').textContent + '  衣装などを合わせられません（素体の骨が見つからない）', true); return; }
 
   // 衣装の骨: 素体の骨（元のポーズ）から見た位置で固定する
   const saved = savePose();
@@ -439,9 +469,9 @@ async function loadParts(parts) {
     }
     return textures.get(url);
   };
-  const meshes = await Promise.all(parts.meshes.map(async pm => {
-    let buf;
-    try { const r = await fetch(pm.url); if (!r.ok) return null; buf = await r.arrayBuffer(); } catch (e) { return null; }
+  const meshes = parts.meshes.map((pm, k) => {
+    const buf = bufs[k];
+    if (!buf) return null;
     const n = pm.vertexCount;
     let off = 0;
     const take = (Type, count) => { const a = new Type(buf.slice(off, off + count * Type.BYTES_PER_ELEMENT)); off += count * Type.BYTES_PER_ELEMENT; return a; };
@@ -473,12 +503,13 @@ async function loadParts(parts) {
     mesh.userData.originalName = pm.name;
     mesh.frustumCulled = false;
     return mesh;
-  }));
+  });
   const added = meshes.filter(Boolean);
   for (const m of added) { M.root.add(m); M.meshes.push(m); }
   M.root.updateMatrixWorld(true);
-  buildMeshList();
+  if (!quiet) buildMeshList();
   for (const m of hidden) m.visible = false;
+  if (quiet) return;
   refreshMeshList();
   const lost = parts.meshes.length - added.length;
   setStatus($('status').textContent + `  衣装など${added.length}個` + (lost ? `（${lost}個は読めません）` : '') +
@@ -486,7 +517,7 @@ async function loadParts(parts) {
 }
 
 /** シーンで出ていない FBX のメッシュ（パスはモデルのルートから）を隠す。隠した物を返す */
-function hideSceneMeshes(paths) {
+function hideSceneMeshes(paths, quiet = false) {
   if (!paths.length) return [];
   const want = new Set(paths);
   const out = [];
@@ -495,7 +526,7 @@ function hideSceneMeshes(paths) {
     for (let o = m; o && o !== M.root; o = o.parent) path.unshift(o.userData.originalName ?? o.name);
     if (want.has(path.join('/'))) { m.visible = false; out.push(m); }
   }
-  if (out.length) refreshMeshList();
+  if (out.length && !quiet) refreshMeshList();
   return out;
 }
 
@@ -637,7 +668,8 @@ function guessTexture(matName, images) {
   return best;
 }
 
-function setModel(group, name, info = null) {
+/** into: 相手役のとき、入れる先（画面・左の一覧・カメラは今のアバターのままにする） */
+function setModel(group, name, info = null, into = null) {
   const oldNames = M ? D.tracks.size && new Map([...D.tracks].map(([i, t]) => [M.names[i], t])) : null;
   if (M) {
     gizmo.detach();
@@ -645,7 +677,7 @@ function setModel(group, name, info = null) {
     for (const L of M.limbs) { scene.remove(L.target); scene.remove(L.pole); }
     M.root.traverse(o => { if (o.isMesh) { o.geometry.dispose(); [].concat(o.material).forEach(m => { m.map?.dispose(); m.dispose(); }); } });
   }
-  scene.add(group);
+  (into || scene).add(group);
   group.updateMatrixWorld(true);
 
   const isBone = o => o.isBone && !(o.parent && o.parent.isBone && o.parent.ID === o.ID);
@@ -706,8 +738,9 @@ function setModel(group, name, info = null) {
   D.tracks.clear();
   if (oldNames) for (const [n, t] of oldNames) if (byName.has(n)) D.tracks.set(byName.get(n), t);
   for (const id of [...D.shapes.keys()]) if (!M.shapeById.has(id)) D.shapes.delete(id);
-  S.shapeSel = null;
   docVer++;
+  if (into) return;
+  S.shapeSel = null;
 
   frameCamera();
   buildBoneList();
@@ -3601,12 +3634,13 @@ function projectData() {
     shapes: [...D.shapes].filter(([, t]) => t.keys.length).map(([id, t]) => ({ id, keys: t.keys.map(k => ({ f: k.f, v: k.v })) })),
     interp: [...D.interp],
     frame: S.frame, dirty: S.dirty,
+    // 相手役（見るだけ）。相手役の中身を作るときは M・D が相手のものになっているので入れない
+    ...(M !== P.M && (P.M || P.pending) ? { pair: P.M ? pairData() : P.pending } : {}),
   };
 }
 
-/** projectData() の中身を開く。戻り値は、モデルに無くて使えなかった骨とシェイプの数 */
-function applyProject(obj) {
-  // 壊れたデータで途中まで書き換わらないように、先に全部組んでから入れ替える
+/** projectData() の中身から、今のモデル（M）の骨に合わせたキーを組む。D は変えない。missing: モデルに無くて使えなかった骨とシェイプの数 */
+function readProject(obj) {
   const tracks = new Map(), shapes = new Map(), interp = new Map(obj.interp || []);
   let missing = 0;
   for (const t of obj.tracks || []) {
@@ -3618,17 +3652,27 @@ function applyProject(obj) {
     if (!M.shapeById.has(sh.id)) { missing++; continue; }
     shapes.set(sh.id, { keys: sh.keys.map(k => ({ f: k.f, v: k.v })) });
   }
-  D.name = obj.name || 'NewMotion';
-  D.fps = obj.fps || 30;
-  D.frameCount = Math.max(1, obj.frameCount || 60);
-  D.loop = obj.loop !== false;
-  D.breath = { on: false, period: 4, amp: 100, ...(obj.breath || {}) };
+  return {
+    doc: {
+      name: obj.name || 'NewMotion', fps: obj.fps || 30, frameCount: Math.max(1, obj.frameCount || 60), loop: obj.loop !== false,
+      breath: { on: false, period: 4, amp: 100, ...(obj.breath || {}) }, tracks, shapes, interp,
+    },
+    missing,
+  };
+}
+
+/** projectData() の中身を開く。戻り値は、モデルに無くて使えなかった骨とシェイプの数 */
+function applyProject(obj) {
+  // 壊れたデータで途中まで書き換わらないように、先に全部組んでから入れ替える
+  const { doc, missing } = readProject(obj);
+  const { tracks, shapes, ...rest } = doc;
+  Object.assign(D, rest);
   D.tracks.clear();
   D.shapes.clear();
   for (const [i, t] of tracks) D.tracks.set(i, t);
   for (const [id, t] of shapes) D.shapes.set(id, t);
-  D.interp = interp;
   docVer++;
+  if (obj.pair) restorePair(obj.pair);
   TL.sel.clear();
   TL.fit = true;
   goFrame(obj.frame || 0);
@@ -3716,6 +3760,226 @@ window.addEventListener('drop', e => {
   e.preventDefault();
   openProjectFile(f);
 });
+
+// ================================================================
+//  相手役（2 人目のアバター）。今は見るだけ: 置き場所を決めて、相手の動きを同じタイムラインで一緒に再生する
+//  相手のモデルとキーは P.M・P.D に置き、使うときだけ M・D と入れ替える（asPair）。再生も保存も同じ関数で済む
+// ================================================================
+
+const P = {
+  M: null, D: null,
+  /** どこから読んだか（kind: 'same' = 今のアバターと同じファイル、'file' = 選んだファイル） */
+  src: null,
+  show: true, motion: '',
+  /** 置き場所: ワールドの位置と、Y 軸まわりの向き（度） */
+  place: { x: 0, y: 0, z: 0, yaw: 0 },
+  wrap: new THREE.Group(),
+  /** 開いたプロジェクトの相手役で、まだモデルが無くて戻せていない物 */
+  pending: null,
+  /** 保存してあった相手役を戻しているところ（保存していない変更があることにはしない） */
+  restoring: false,
+};
+scene.add(P.wrap);
+
+const newDocData = () => ({ name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } });
+
+/**
+ * fn のあいだだけ、M・D を相手役のものにする。fn の中で await しない（そのあいだに描画などが走ると混ざる）。
+ * 相手役は置き場所を原点に戻して計算する（元のポーズはそこで測ってある）。
+ */
+function asPair(fn) {
+  const keep = { M, D, boneView: S.boneView };
+  M = P.M; D = P.D;
+  P.wrap.position.set(0, 0, 0);
+  P.wrap.quaternion.identity();
+  P.wrap.updateMatrixWorld(true);
+  try { return fn(); }
+  finally { P.M = M; P.D = D; M = keep.M; D = keep.D; S.boneView = keep.boneView; placePair(); }
+}
+function placePair() {
+  P.wrap.position.set(P.place.x, P.place.y, P.place.z);
+  P.wrap.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), P.place.yaw * Math.PI / 180);
+  P.wrap.visible = P.show;
+  P.wrap.updateMatrixWorld(true);
+}
+
+/** 今のフレーム → 相手役のフレーム。時刻でそろえる（fps が違っても同じ時刻）。相手の長さを越えたら、ループならくり返し、でなければ最後で止める */
+function pairFrame(f) {
+  const t = f / D.fps * P.D.fps, n = P.D.frameCount;
+  return P.D.loop ? ((t % n) + n) % n : clamp(t, 0, n);
+}
+/** 描くたびに、相手役を今のフレームのポーズにする（Unity の再生に近い見た目も、今のアバターと同じく入れる） */
+function updatePair() {
+  if (!P.M || !P.show) return;
+  const f = pairFrame(S.playing ? S.playT : S.frame);
+  asPair(() => {
+    poseAt(f, S.playing);
+    if (S.unityView) applyUnityView();
+  });
+}
+
+async function loadPair(src) {
+  if (!M) return false;
+  setStatus('相手役を読み込み中…');
+  const r = await parseModelFiles(src.files, src.texByMat, src.body);
+  if (!r) { setStatus('相手役: FBX がありません', true); return false; }
+  if (r.error) { setStatus('相手役: FBXを読めません: ' + r.error, true); return false; }
+  const bufs = src.parts?.meshes?.length ? await fetchParts(src.parts) : null;
+  removePair(false);
+  P.D = newDocData();
+  asPair(() => {
+    setModel(r.group, r.name, r.info, P.wrap);
+    applyBodyShapes(src.body, true);
+    if (bufs) addParts(src.parts, bufs, true);
+  });
+  P.src = src;
+  P.motion = '';
+  P.show = true;
+  updateButtons();
+  facePair();
+  setStatus(`相手役: ${r.name}` + (r.missing.length ? `  テクスチャなし: ${r.missing.join(', ')}` : ''));
+  // 開いたプロジェクトの相手役が、このモデルを待っていたら戻す
+  if (P.pending && P.pending.model === r.name) applyPairData(P.pending);
+  return true;
+}
+
+function removePair(clearPending = true) {
+  if (clearPending) P.pending = null;
+  if (!P.M) return;
+  for (const L of P.M.limbs) { scene.remove(L.target); scene.remove(L.pole); }
+  P.wrap.remove(P.M.root);
+  P.M.root.traverse(o => { if (o.isMesh) { o.geometry.dispose(); [].concat(o.material).forEach(m => { m.map?.dispose(); m.dispose(); }); } });
+  P.M = P.D = P.src = null;
+  P.motion = '';
+  pairChanged();
+}
+
+/** 今のアバターの正面に、こちらを向けて置く。腰どうしの間は、背の高いほうの 1/4 くらい */
+function facePair() {
+  if (!M || !P.M) return;
+  const up = new THREE.Vector3(0, 1, 0);
+  const fwd = modelForward();
+  const pf = asPair(() => modelForward());
+  const yaw = Math.atan2(-fwd.x, -fwd.z) - Math.atan2(pf.x, pf.z);
+  const want = M.restWP[M.hips].clone().addScaledVector(fwd, 0.25 * Math.max(M.size, P.M.size));
+  const hips = P.M.restWP[P.M.hips].clone().applyAxisAngle(up, yaw);
+  const r3 = v => Math.round(v * 1000) / 1000;
+  let deg = Math.round(yaw * 180 / Math.PI) % 360;
+  if (deg > 180) deg -= 360;
+  if (deg <= -180) deg += 360;
+  P.place = { x: r3(want.x - hips.x), y: 0, z: r3(want.z - hips.z), yaw: deg };
+  pairChanged();
+}
+
+/** 相手役の動きを、projectData() の形の物から入れる。戻り値は、相手のモデルに無くて使えなかった骨とシェイプの数 */
+function setPairMotion(obj, label) {
+  const { doc, missing } = asPair(() => readProject(obj));
+  P.D = doc;
+  P.motion = label;
+  pairChanged();
+  return missing;
+}
+
+/** 保存する相手役の中身（モデルのファイルは入れない。'same' なら開くときに今のアバターから作り直す） */
+function pairData() {
+  const motion = asPair(() => projectData());
+  delete motion.frame;
+  delete motion.dirty;
+  return { src: P.src?.kind || 'file', model: P.M.name, show: P.show, place: { ...P.place }, motionName: P.motion, motion };
+}
+function applyPairData(pd) {
+  const restoring = P.restoring;
+  P.restoring = true;
+  P.pending = null;
+  if (pd.motion) setPairMotion(pd.motion, pd.motionName || '');
+  P.place = { x: 0, y: 0, z: 0, yaw: 0, ...pd.place };
+  P.show = pd.show !== false;
+  pairChanged();
+  P.restoring = restoring;
+}
+/** プロジェクトを開いたとき。同じアバターならすぐ作り直す。ファイルから読んだ相手役は、同じモデルを選び直すまで待つ */
+async function restorePair(pd) {
+  if (P.M && P.M.name === pd.model) { applyPairData(pd); return; }
+  P.pending = pd;
+  if (pd.src === 'same' && S.modelSrc) {
+    // 戻すだけなので、保存していない変更があることにはしない
+    P.restoring = true;
+    try { if (await loadPair({ ...S.modelSrc, kind: 'same' })) applyPairData(pd); }
+    finally { P.restoring = false; }
+  } else {
+    refreshPairUI();
+    setStatus($('status').textContent + `  相手役（${pd.model}）は「相手」から同じモデルを選ぶと戻ります`);
+  }
+}
+
+function pairChanged() {
+  placePair();
+  refreshPairUI();
+  if (!M) return;
+  if (!P.restoring) markDirty();
+  autoSavedVer = -1;
+}
+
+function refreshPairUI() {
+  const has = !!P.M;
+  $('bPair').classList.toggle('on', has && P.show);
+  $('paName').textContent = has
+    ? `相手役: ${P.M.name}　動き: ${P.motion || 'なし'}${P.motion ? `（${P.D.frameCount}F・${P.D.fps}fps${P.D.loop ? '・ループ' : ''}）` : ''}`
+    : P.pending ? `相手役なし（${P.pending.model} を選ぶと、保存してあった置き場所と動きが戻ります）` : '相手役なし';
+  $('paSame').disabled = !S.modelSrc;
+  for (const id of ['paDel', 'paShow', 'paMotion', 'paCopy', 'paStill', 'paX', 'paY', 'paZ', 'paYaw', 'paFace']) $(id).disabled = !has;
+  $('paShow').checked = P.show;
+  const put = (id, v) => { if (document.activeElement !== $(id)) $(id).value = v; };
+  put('paX', P.place.x); put('paY', P.place.y); put('paZ', P.place.z); put('paYaw', P.place.yaw);
+}
+
+$('bPair').onclick = () => {
+  const pop = $('pairPop');
+  if (pop.style.display === 'flex') { pop.style.display = 'none'; return; }
+  refreshPairUI();
+  const r = $('bPair').getBoundingClientRect();
+  Object.assign(pop.style, { display: 'flex', left: Math.max(4, Math.min(r.left, innerWidth - 470)) + 'px', top: r.bottom + 4 + 'px' });
+};
+document.addEventListener('pointerdown', e => {
+  if (!e.target.closest('#pairPop, #bPair')) $('pairPop').style.display = 'none';
+});
+$('paSame').onclick = () => { if (S.modelSrc) loadPair({ ...S.modelSrc, kind: 'same' }); };
+$('paFolder').onclick = () => $('paFolderIn').click();
+$('paFiles').onclick = () => $('paFilesIn').click();
+const pairFilesPicked = e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (files.length) loadPair({ files, texByMat: null, body: null, parts: null, kind: 'file' });
+};
+$('paFolderIn').onchange = pairFilesPicked;
+$('paFilesIn').onchange = pairFilesPicked;
+$('paDel').onclick = () => { removePair(); setStatus('相手役を消しました'); };
+$('paShow').onchange = e => { P.show = e.target.checked; pairChanged(); };
+$('paFace').onclick = () => facePair();
+for (const [id, k] of [['paX', 'x'], ['paY', 'y'], ['paZ', 'z'], ['paYaw', 'yaw']]) {
+  $(id).oninput = e => { const v = Number(e.target.value); if (Number.isFinite(v)) { P.place[k] = v; pairChanged(); } };
+  $(id).onchange = () => refreshPairUI();
+}
+$('paMotion').onclick = () => $('paMotionIn').click();
+$('paMotionIn').onchange = async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file || !P.M) return;
+  let obj;
+  try { obj = JSON.parse(await file.text()); } catch (err) { obj = null; }
+  if (obj?.format !== PROJECT_FORMAT) { setStatus('相手役: ' + file.name + ' は .sismotion ではありません', true); return; }
+  let missing;
+  try { missing = setPairMotion(obj, file.name.replace(/\.sismotion$/i, '')); }
+  catch (err) { setStatus('相手役: ' + file.name + ' の中身が壊れています', true); return; }
+  setStatus(`相手役の動き: ${file.name}` + (missing ? `  相手のモデルに無い骨・シェイプ ${missing}個` : ''), missing > 0);
+};
+$('paCopy').onclick = () => {
+  if (!P.M) return;
+  const missing = setPairMotion(projectData(), `${D.name}の写し`);
+  setStatus('今の動きを相手役に写しました' + (missing ? `  相手のモデルに無い骨・シェイプ ${missing}個` : ''));
+};
+$('paStill').onclick = () => { if (P.M) { P.D = newDocData(); P.motion = ''; pairChanged(); } };
+refreshPairUI();
 
 /** Unity が覚えていた編集用のデータ（または .anim から起こしたポーズ）を開く */
 function applyMotionJson(obj, fileName) {
@@ -4193,7 +4457,8 @@ function renderHelp() {
   add('行', '名前で選ぶ、＋ かダブルクリックでキー、ホイールで縦、Shift+ホイールで横、Ctrl+ホイールで拡大');
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
   $('helpNote').textContent = (S.sample ? '「.anim保存」で、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '「.anim保存」で、Unityのプロジェクトに.animができる') +
-    '。作りかけは自動で残り、次に開くと続きから。「プロジェクト保存」で.sismotionにも残せる';
+    '。作りかけは自動で残り、次に開くと続きから。「プロジェクト保存」で.sismotionにも残せる' +
+    '。「相手」で2人目のアバターを出して、その.sismotionを一緒に再生できる（見るだけ。キーを打つのは今のアバター）';
 }
 
 window.addEventListener('keydown', e => {
@@ -4601,6 +4866,7 @@ function tick(now) {
     const f = Math.floor(S.playT);
     if (f !== S.frame) { S.frame = f; $('frame').value = f; drawTimeline(); }
   }
+  updatePair();
   scene.updateMatrixWorld();
   if (M) updateMarkers();
   const view = M && S.unityView ? applyUnityView() : null;
@@ -4690,6 +4956,8 @@ async function loadDefaultModel() {
   const files = unity ? unity.files : await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
   if (!files.some(f => /\.fbx$/i.test(f.name))) { say('モデルを読み込めませんでした'); return; }
   await loadModelFiles(files, unity ? unity.texByMat : null, unity ? unity.body : null);
+  // 相手役の「同じアバター」は、同じファイルからもう1体作る
+  if (M) S.modelSrc = { files, texByMat: unity ? unity.texByMat : null, body: unity ? unity.body : null, parts: unity?.parts || null };
   if (unity?.parts) await loadParts(unity.parts);
   if (unity) await openFromUnity(unity.man);
   // Unity を通さないページは、茜犬の見本（モデルの数値が入っているので、ブラウザだけで .anim を書ける）
@@ -4704,7 +4972,7 @@ loadDefaultModel();
 
 // 確認用（コンソールから触る）
 window.MT = {
-  THREE, D, S, get M() { return M; }, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
+  THREE, S, get D() { return D; }, get M() { return M; }, get pair() { return P; }, goFrame, keyBones, buildFile, applyMotionJson, fitRest, solveLimb, syncLimbs,
   mirrorPose, copyPose, pastePose, select, undo, redo, pick, boneAtHit, newDoc, keyAll, projectData, applyProject, allKeyFrames, constrainBone, camera, gizmo,
   applyUnityView, restoreUnityView, analyzeLimb, orbit, get settings() { return CFG; },
   TL, drawTimeline, copyKeys, pasteKeys, deleteKeys, moveKeys, fx, rowY, buildAnim, buildAnimModel, animFrame,
