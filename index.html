@@ -5361,11 +5361,14 @@ const HAND_DRAW = {
 };
 const JOINT_T = { Proximal: 0.04, Intermediate: 0.42, Distal: 0.72 };
 const THUMB_T = { Proximal: 0.02, Intermediate: 0.44, Distal: 0.74 };
-/** 上限（度）。曲げは手のひらの側が正、開きは親指の側が正 */
+/**
+ * 上限（度）。曲げは手のひらの側が正（負は反らす）、開きは親指の側が正。
+ * 自分で動かせる範囲より少し広く、指で押して反らせる所まで（付け根・第 1 関節・親指は大きく反る）
+ */
 const HAND_RANGE = {
-  bend: { Proximal: [-25, 90], Intermediate: [-5, 110], Distal: [-5, 85] },
-  thumbBend: { Proximal: [-25, 50], Intermediate: [-15, 70], Distal: [-15, 85] },
-  spread: { Thumb: [-30, 60], Index: [-25, 25], Middle: [-25, 25], Ring: [-25, 25], Little: [-35, 25] },
+  bend: { Proximal: [-50, 100], Intermediate: [-15, 120], Distal: [-35, 95] },
+  thumbBend: { Proximal: [-45, 65], Intermediate: [-30, 80], Distal: [-50, 95] },
+  spread: { Thumb: [-40, 80], Index: [-30, 40], Middle: [-35, 35], Ring: [-40, 30], Little: [-55, 30] },
 };
 
 S.handPad = (() => { try { return localStorage.getItem('mt.handPad') !== '0'; } catch (e) { return true; } })();
