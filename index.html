@@ -2954,6 +2954,11 @@ $('tabMeshes').onclick = () => setTab('meshes');
 // ================================================================
 
 const meshLabel = m => m.userData.originalName || m.name || '(名前なし)';
+/**
+ * 自動保存と隠したメッシュを覚える単位。Unity から開いたときはシーンのアバターごと（同じ FBX の改変違いで混ざらないように）、見本はモデルごと。
+ * Unity が渡すアバターの ID は、モデルを読む前に S.avatarId に入れておく（メッシュの一覧はモデルを読むときに作るため）
+ */
+const avatarKey = () => S.avatarId || M.name;
 
 function buildMeshList() {
   const list = $('meshes');
@@ -2984,7 +2989,7 @@ function buildMeshList() {
   });
   // 前に隠したメッシュ
   try {
-    const hidden = new Set(JSON.parse(localStorage.getItem('motiontool.hidden:' + M.name) || '[]'));
+    const hidden = new Set(JSON.parse(localStorage.getItem('motiontool.hidden:' + avatarKey()) || '[]'));
     M.meshes.forEach(m => { if (hidden.has(meshLabel(m))) m.visible = false; });
   } catch (e) { /* 覚えていなければ全部表示 */ }
   refreshMeshList();
@@ -2993,7 +2998,7 @@ function buildMeshList() {
 function setMeshesVisible(fn) {
   if (!M) return;
   M.meshes.forEach((m, k) => { m.visible = !!fn(m, k); });
-  try { localStorage.setItem('motiontool.hidden:' + M.name, JSON.stringify(M.meshes.filter(m => !m.visible).map(meshLabel))); } catch (e) { /* 覚えられなくても動く */ }
+  try { localStorage.setItem('motiontool.hidden:' + avatarKey(), JSON.stringify(M.meshes.filter(m => !m.visible).map(meshLabel))); } catch (e) { /* 覚えられなくても動く */ }
   refreshMeshList();
 }
 
@@ -3676,9 +3681,8 @@ async function openProjectFile(file) {
   setStatus(`開いた: ${file.name}  キー${allKeyFrames().length}個` + (notes.length ? '  ' + notes.join('、') : ''), missing > 0);
 }
 
-// 自動保存: ブラウザの中に、アバターごとに今の状態を残す。開いたときに同じアバターならそのまま戻す
-// Unity から開いたときはシーンのアバターごと（同じ FBX の改変違いで混ざらないように）。見本はモデルごと
-const autosaveKey = () => M ? 'sismotion.autosave:' + (S.unity?.avatar || M.name) : null;
+// 自動保存: ブラウザの中に、アバターごと（avatarKey）に今の状態を残す。開いたときに同じアバターならそのまま戻す
+const autosaveKey = () => M ? 'sismotion.autosave:' + avatarKey() : null;
 let autoSavedVer = -1, autoSavedFrame = -1;
 /** 起動して、前回の続きを戻すかどうか決めるまでは書かない（読み込みの途中の空の状態で上書きしないように） */
 let autoReady = false;
@@ -4663,7 +4667,7 @@ async function filesFromUnity() {
 
 /** Unityで.animを選んで開いたとき。Unityが覚えていた編集用のデータか、無ければ.animから起こしたポーズが来る。 */
 async function openFromUnity(man) {
-  S.unity = { path: man.anim || null, dir: man.saveDir || 'Assets', avatar: man.avatar || null };
+  S.unity = { path: man.anim || null, dir: man.saveDir || 'Assets' };
   document.body.classList.add('unity');
   if (!man.motion) return;
   try {
@@ -4682,6 +4686,7 @@ async function loadDefaultModel() {
   const say = text => { $('empty').firstElementChild.textContent = text; setStatus(text, true); };
   if (!/^https?:$/.test(location.protocol)) { say('公開ページか、Unity の Tools/SisMotionTooL から開いてください'); return; }
   const unity = new URLSearchParams(location.search).has('unity') ? await filesFromUnity() : null;
+  S.avatarId = unity?.man.avatar || null;
   const files = unity ? unity.files : await filesFromUrls(DEFAULT_MODEL.map(f => f.split('/').map(encodeURIComponent).join('/')));
   if (!files.some(f => /\.fbx$/i.test(f.name))) { say('モデルを読み込めませんでした'); return; }
   await loadModelFiles(files, unity ? unity.texByMat : null, unity ? unity.body : null);
