@@ -117,14 +117,14 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 #ikRows .nm { width: 36px; }
 #handPad { position: absolute; right: 8px; top: 8px; width: 190px; background: rgba(37,39,43,.92); border: 1px solid var(--line);
   border-radius: 6px; display: none; z-index: 4; touch-action: none; }
-#handPad .hbar { display: flex; gap: 3px; align-items: center; padding: 3px 4px 0; }
+#handPad .hbar { display: flex; gap: 3px; align-items: center; padding: 3px 4px 0; cursor: move; touch-action: none; }
 #handPad .hbar button { height: 20px; padding: 0 6px; }
 #handPad .hbar span { flex: 1; color: var(--dim); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #handPad svg { display: block; width: 100%; height: auto; }
 #handPad .palm { cursor: ns-resize; }
 #handPad .zone { stroke: transparent; stroke-width: 15; stroke-linecap: round; cursor: ns-resize; }
 #handPad .zone.side { cursor: ew-resize; }
-#handPad .zone:hover + .mark, #handPad .zone.drag + .mark { stroke: #fff; }
+#handPad .zone:hover + .mark, #handPad .zone.drag + .mark, #handPad .palm:hover ~ .palmMark, #handPad .palm.drag ~ .palmMark { stroke: #fff; }
 #handPad .mark { pointer-events: none; stroke-linecap: round; }
 </style>
 <script type="importmap">
@@ -150,7 +150,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <span class="sep"></span>
     <button id="bIK" title="手先・足先をIKで動かす">IK</button>
     <button id="bIKList" title="IKごとに、出す・しまう・固定する">▾</button>
-    <button id="bPin" title="選んでいるIKを固定する（体を動かしても、その場に残す）">固定</button>
+    <button id="bPin" title="IKの固定をまとめて入 / 切する。切っても、IKごとの固定（「▾」）は覚えている">固定</button>
     <button id="bAuto" title="動かし終えたらキーを打つ">自動キー</button>
     <button id="bSym" title="左右の骨を一緒に動かす">対称</button>
     <button id="bLimit" title="首や手首などを回しすぎないようにする">上限</button>
@@ -991,11 +991,15 @@ const IK_KINDS = [['Head', '頭'], ['Look', '視線'], ['Hips', '腰'], ['LeftHa
 S.ikOpt = (() => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('mt.ikOpt') || '{}') || {}; } catch (e) { /* 無ければ既定 */ }
-  return Object.fromEntries(IK_KINDS.map(([k]) => [k, { show: saved[k]?.show !== false, pin: !!saved[k]?.pin }]));
+  // 最初は手と足だけを出して固定する。頭・視線・腰は「▾」から出す
+  const limb = k => /Hand|Foot/.test(k);
+  return Object.fromEntries(IK_KINDS.map(([k]) => [k, { show: saved[k]?.show ?? limb(k), pin: saved[k]?.pin ?? limb(k) }]));
 })();
 const saveIkOpt = () => { try { localStorage.setItem('mt.ikOpt', JSON.stringify(S.ikOpt)); } catch (e) { /* 覚えられなくてもいい */ } };
 const ikShown = key => S.ik && !!S.ikOpt[key]?.show;
-const ikPinned = key => S.ik && !!S.ikOpt[key]?.pin;
+/** 固定ボタン。切ると、IK ごとの固定はそのまま覚えて、効かなくする */
+S.pinOn = (() => { try { return localStorage.getItem('mt.pinOn') !== '0'; } catch (e) { return true; } })();
+const ikPinned = key => S.pinOn && ikShown(key) && !!S.ikOpt[key]?.pin;
 /** 選んでいる物の IK の種類（IK でなければ null） */
 function ikKeyOfSel(sel = S.sel) {
   if (!sel || !M) return null;
@@ -3337,8 +3341,7 @@ function updateButtons() {
   $('bRot').classList.toggle('on', S.mode === 'rotate');
   $('bSpace').textContent = S.space === 'local' ? 'ローカル' : 'ワールド';
   $('bIK').classList.toggle('on', S.ik);
-  const ikSel = ikKeyOfSel();
-  $('bPin').classList.toggle('on', !!ikSel && !!S.ikOpt?.[ikSel]?.pin);
+  $('bPin').classList.toggle('on', S.pinOn);
   $('bPin').disabled = !S.ik;
   $('bAuto').classList.toggle('on', S.autoKey);
   $('bSym').classList.toggle('on', !!S.sym);
@@ -4807,11 +4810,15 @@ function leaveHiddenIk() {
   if (!k || ikShown(k)) return;
   select({ kind: 'bone', i: S.sel.kind === 'look' || S.sel.kind === 'head' ? M.human.Head : S.sel.kind === 'hips' ? M.hips : M.limbs[S.sel.limb].c });
 }
+/** このモデルにある IK の種類か */
+function ikExists(k) {
+  if (!M) return true;
+  return k === 'Head' ? hasHeadIK() : k === 'Hips' ? hasHipsIK() : k === 'Look' ? M.human.Head != null : M.limbs.some(L => L.key === k);
+}
 $('bPin').onclick = () => {
-  const k = ikKeyOfSel();
-  if (!k) { setStatus('固定するIK（手先・足先・頭の四角か、視線の的）を選んでください。「▾」からも固定できます'); return; }
-  setIkOpt(k, 'pin', !S.ikOpt[k].pin);
-  setStatus(`${IK_KINDS.find(x => x[0] === k)[1]}のIKを${S.ikOpt[k].pin ? '固定しました（体を動かしても、その場に残る）' : '固定から外しました'}`);
+  S.pinOn = !S.pinOn;
+  try { localStorage.setItem('mt.pinOn', S.pinOn ? '1' : '0'); } catch (e) { /* 覚えられなくてもいい */ }
+  updateButtons();
 };
 function setIkOpt(k, what, v) {
   S.ikOpt[k][what] = v;
@@ -4825,7 +4832,7 @@ function refreshIkPop() {
   if (!rows || $('ikPop').style.display !== 'flex') return;
   rows.innerHTML = '';
   for (const [k, label] of IK_KINDS) {
-    if (M && (k === 'Head' ? !hasHeadIK() : k === 'Hips' ? !hasHipsIK() : k === 'Look' ? M.human.Head == null : !M.limbs.some(L => L.key === k))) continue;
+    if (!ikExists(k)) continue;
     const row = document.createElement('div');
     row.className = 'prow';
     const nm = document.createElement('span');
@@ -4983,7 +4990,7 @@ const ACTIONS = [
   ['copy', 'コピー', 'Ctrl+KeyC'], ['paste', '貼り付け', 'Ctrl+KeyV'], ['pasteMirror', '反転して貼り付け', 'Ctrl+Shift+KeyV'],
   ['save', '.anim保存', 'Ctrl+KeyS'], ['saveAs', '.anim別名保存', 'Ctrl+Shift+KeyS'],
   ['saveProj', 'プロジェクト保存', 'Ctrl+Alt+KeyS'], ['openProj', '開く', 'Ctrl+KeyO'], ['newDoc', '新規', ''],
-  ['ik', 'IKの入 / 切', ''], ['pin', '選んだIKの固定の入 / 切', ''], ['falloff', '伝染の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
+  ['ik', 'IKの入 / 切', ''], ['pin', '固定の入 / 切', ''], ['falloff', '伝染の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
   ['onion', 'オニオンの入 / 切', ''], ['boneView', '骨の表示を切り替え', ''],
   ['mirrorAll', '全身を反転', ''], ['mirrorSel', '選んだ骨を反対側へ', ''],
   ['swapActor', '動かすアバターを入れ替え（相手役）', 'KeyQ'],
@@ -5197,7 +5204,7 @@ function renderHelp() {
   add('ホイール', '寄る・引く');
   add('右クリック', 'その場所のメッシュ（服など）を隠す。「表示」タブでも切り替え');
   add('緑の四角', 'ルート。全体の移動と回転（腰から下がまとめて動く）');
-  add('IK', '水色の四角（手先・足先・頭・腰）を動かすと、腕・脚・背骨と首が付いてくる。腰の四角は足先を残して腰を動かし、回すと腰だけが回る（胸の向きはそのまま）。桃色の四角は頭の向きの的。ツールバーの「▾」で、IKごとに出す・しまう・固定する。固定したIK（赤）は、体を動かしてもその場に残る');
+  add('IK', '水色の四角（手先・足先・頭・腰）を動かすと、腕・脚・背骨と首が付いてくる。腰の四角は足先を残して腰を動かし、回すと腰だけが回る（胸の向きはそのまま）。桃色の四角は頭の向きの的。「▾」でIKごとに出す・しまう・固定する。「固定」を切ると、IKごとの固定を覚えたまま効かなくする。固定したIK（赤）は、体を動かしてもその場に残る');
   add('手パッド', '手首か指を選ぶと右上に出る。赤い所を縦にドラッグで関節を曲げる（Shiftで指全体、手のひらで4本まとめて）、青い所を横にドラッグで指を開く。クリックでその骨を選ぶ');
   for (const [id, label] of ACTIONS) if (CFG.keys[id]) add(keyLabel(id), label);
   add('目盛り', 'ドラッグでフレーム、右端の印で長さ、ホイールで拡大、ダブルクリックで全体');
@@ -5717,6 +5724,7 @@ function buildHandPad() {
   svgEl('title', {}, palm).textContent = '縦にドラッグ: 親指以外の4本をまとめて曲げる';
   palm.dataset.zone = 'palm';
   for (const f of FINGERS) { const F = HAND_DRAW[f]; line(F.base, F.tip, { stroke: inner, 'stroke-width': F.w, 'stroke-linecap': 'round', 'pointer-events': 'none' }); }
+  line([56, 150], [132, 150], { class: 'mark palmMark', stroke: '#e0453c', 'stroke-width': 4.5 }); // 手のひらも縦にドラッグできる印
   HP.zones = [];
   for (const f of FINGERS) {
     const F = HAND_DRAW[f];
@@ -5774,6 +5782,7 @@ function syncHandPad() {
   $('handPad').style.display = key ? 'block' : 'none';
   if (!key) return;
   if (!HP.root) buildHandPad();
+  placeHandPad();
   HP.side = side;
   HP.root.setAttribute('transform', side === 'Right' ? 'translate(214 0) scale(-1 1)' : '');
   $('hpL').classList.toggle('on', side === 'Left');
@@ -5864,6 +5873,40 @@ const endHandDrag = () => {
 $('hpSvg').addEventListener('pointerup', endHandDrag);
 $('hpSvg').addEventListener('pointercancel', endHandDrag);
 $('handPad').addEventListener('contextmenu', e => e.preventDefault());
+
+// パッドの上の帯をドラッグで動かす。置いた所はブラウザが覚える（3D表示の右上からの距離）
+HP.pos = (() => { try { return JSON.parse(localStorage.getItem('mt.handPadPos')) || null; } catch (e) { return null; } })();
+/** 覚えた所に置く。3D表示が狭くなっても外に出ないようにする */
+function placeHandPad() {
+  const pad = $('handPad'), view = $('view');
+  if (!HP.pos) { pad.style.left = ''; pad.style.right = '8px'; pad.style.top = '8px'; return; }
+  const x = clamp(HP.pos.right, 0, Math.max(0, view.clientWidth - pad.offsetWidth));
+  const y = clamp(HP.pos.top, 0, Math.max(0, view.clientHeight - pad.offsetHeight));
+  pad.style.left = ''; pad.style.right = x + 'px'; pad.style.top = y + 'px';
+}
+document.querySelector('#handPad .hbar').addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.target.closest('button')) return;
+  e.preventDefault();
+  const pad = $('handPad'), bar = e.currentTarget;
+  const start = { x: e.clientX, y: e.clientY, right: parseFloat(pad.style.right) || 0, top: parseFloat(pad.style.top) || 0 };
+  bar.setPointerCapture(e.pointerId);
+  const move = ev => {
+    HP.pos = { right: start.right - (ev.clientX - start.x), top: start.top + (ev.clientY - start.y) };
+    placeHandPad();
+  };
+  const up = () => {
+    bar.removeEventListener('pointermove', move);
+    bar.removeEventListener('pointerup', up);
+    bar.removeEventListener('pointercancel', up);
+    if (!HP.pos) return;
+    HP.pos = { right: parseFloat(pad.style.right), top: parseFloat(pad.style.top) };
+    try { localStorage.setItem('mt.handPadPos', JSON.stringify(HP.pos)); } catch (err) { /* 覚えられなくてもいい */ }
+  };
+  bar.addEventListener('pointermove', move);
+  bar.addEventListener('pointerup', up);
+  bar.addEventListener('pointercancel', up);
+});
+window.addEventListener('resize', () => { if ($('handPad').style.display === 'block') placeHandPad(); });
 
 /** 左手・右手のボタン: 反対の手の、同じ所を選ぶ */
 const handSwitch = side => () => {
