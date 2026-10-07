@@ -716,13 +716,16 @@ function setModel(group, name, info = null, into = null) {
   group.updateMatrixWorld(true);
 
   const isBone = o => o.isBone && !(o.parent && o.parent.isBone && o.parent.ID === o.ID);
+  const ownInfo = info && info.model === name ? info : null;
+  // 人型でないモデル（Unity で Generic）。人型の骨を推測しない（IK・手パッド・呼吸・上限は使えない）
+  const generic = ownInfo?.rig === 'Generic';
   // 腰のすぐ上に「ルート」を1つ挟む（全体の移動・回転用）。FBXには無い物なので、書き出すときは骨として数えない。
   // 動くのは腰から下だけ。UnityのHumanoidの再生も腰から下しか動かさないので、見た目がそろう
   const rootNode = new THREE.Group();
   {
     const list = [];
     group.traverse(o => { if (isBone(o)) list.push(o); });
-    const hips = findHipsObject(list, info && info.model === name ? info : null);
+    const hips = findHipsObject(list, ownInfo);
     if (hips) { hips.parent.add(rootNode); rootNode.add(hips); }
   }
   const bones = [];
@@ -751,7 +754,7 @@ function setModel(group, name, info = null, into = null) {
   }
 
   M = {
-    root: group, name, bones, index, names, byName, parent, depth, children, meshes, rootBone: index.get(rootNode) ?? -1,
+    root: group, name, generic, bones, index, names, byName, parent, depth, children, meshes, rootBone: index.get(rootNode) ?? -1,
     shapes, shapeById: new Map(shapes.map(x => [x.id, x])), shapeIndex: new Map(shapes.map((x, k) => [x.id, k])),
     restQ: bones.map(b => b.quaternion.clone()),
     restP: bones.map(b => b.position.clone()),
@@ -763,11 +766,11 @@ function setModel(group, name, info = null, into = null) {
   for (const p of M.restWP) box.expandByPoint(p);
   M.size = Math.max(1e-3, box.max.y - box.min.y) * 1.1;
 
-  setHuman(guessHuman());
+  setHuman(generic ? {} : guessHuman());
   M.humanFrom = '名前から推測';
-  if (info && info.model === name) applyHumanFromJson(info);
-  M.muscleInfo = info && info.model === name && info.muscle?.bones?.length ? info : null;
-  const axesFrom = info && info.model === name && setUnityInfo(info) ? 'Unity' : loadRememberedInfo() ? 'Unity（前回）' : '';
+  if (ownInfo && !generic) applyHumanFromJson(ownInfo);
+  M.muscleInfo = ownInfo?.muscle?.bones?.length ? ownInfo : null;
+  const axesFrom = generic ? '' : ownInfo && setUnityInfo(ownInfo) ? 'Unity' : loadRememberedInfo() ? 'Unity（前回）' : '';
 
   // 前のモデルのキーは、骨の名前で引き継ぐ
   D.tracks.clear();
@@ -784,7 +787,8 @@ function setModel(group, name, info = null, into = null) {
   $('empty').style.display = 'none';
   S.sel = null;
   goFrame(S.frame);
-  setStatus(`${name}  骨${bones.length}本、人型${M.humanSet.size}本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は${axesFrom}` : ''));
+  setStatus(`${name}  骨${bones.length}本、` + (generic ? '人型でないモデル（骨を回して作る。IK・手パッド・呼吸・上限は使えない）'
+    : `人型${M.humanSet.size}本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は${axesFrom}` : '')));
 }
 
 const ROOT_NAME = 'ルート';
@@ -796,6 +800,8 @@ function findHipsObject(list, info) {
   if (!list.length) return null;
   const names = list.map(b => b.userData.originalName || b.name);
   const pick = n => (names.includes(n) ? list[names.indexOf(n)] : null);
+  // 人型でないモデル: Unity が決めた骨（スキンのいちばん上の骨）、無ければいちばん上の骨。名前の hip は脚の骨のこともあるので見ない
+  if (info?.rig === 'Generic') return pick(info.hips) || list[0];
   const fromInfo = info && Array.isArray(info.human) && info.human.find(t => t.startsWith('Hips:'));
   return (fromInfo && pick(fromInfo.slice(5)))
     || list[names.findIndex(n => /^(hips?|pelvis)$/i.test(n.replace(/^.*:/, '')))]
@@ -815,7 +821,8 @@ function setHuman(map) {
   M.human = {};
   for (const [k, i] of Object.entries(map)) if (i != null && i >= 0) M.human[k.replace(/\s+/g, '')] = i;
   M.humanSet = new Set(Object.values(M.human));
-  M.hips = M.human.Hips ?? bonesMatching(/hip|pelvis/i)[0] ?? 0;
+  // 人型でないモデルは、ルートを挟んだ骨（位置も動かせる骨）
+  M.hips = M.generic ? M.children[M.rootBone]?.[0] ?? 0 : M.human.Hips ?? bonesMatching(/hip|pelvis/i)[0] ?? 0;
   buildLimbs();
   if (M.unityInfo) setUnityInfo(M.unityInfo, false);
   else { buildDof(); buildUnityView(); }
@@ -1066,7 +1073,7 @@ function spineChain() {
   }
   return M.spineChain;
 }
-const hasHipsIK = () => !!M && M.hips >= 0 && M.hips !== M.rootBone;
+const hasHipsIK = () => !!M && !M.generic && M.hips >= 0 && M.hips !== M.rootBone;
 function syncHipsIK() {
   if (!hasHipsIK() || (S.sel?.kind === 'hips' && gizmo.dragging)) return;
   const h = M.bones[M.hips];
@@ -3340,9 +3347,12 @@ function updateButtons() {
   $('bMove').classList.toggle('on', S.mode === 'translate');
   $('bRot').classList.toggle('on', S.mode === 'rotate');
   $('bSpace').textContent = S.space === 'local' ? 'ローカル' : 'ワールド';
+  // 人型でないモデルでは、人型の骨を使う物は効かない
+  const generic = !!M?.generic;
+  for (const id of ['bIK', 'bIKList', 'bHand', 'bLimit', 'bBreath']) $(id).disabled = generic;
   $('bIK').classList.toggle('on', S.ik);
   $('bPin').classList.toggle('on', S.pinOn);
-  $('bPin').disabled = !S.ik;
+  $('bPin').disabled = !S.ik || generic;
   $('bAuto').classList.toggle('on', S.autoKey);
   $('bSym').classList.toggle('on', !!S.sym);
   $('bLimit').classList.toggle('on', S.limits !== false);
@@ -4728,13 +4738,20 @@ function posesToTracks(obj, scale) {
   for (const p of poses) {
     applyRest();
     const place = ([i, k]) => setWorldQuat(M.bones[i], new THREE.Quaternion().fromArray(p.rot, k * 4).multiply(M.restWQ[i]));
-    order.filter(([i]) => M.humanSet.has(i)).forEach(place);
-    if (obj.restFrom === 'unity') unityBonesToRaw();
-    if (p.hipsPos && hi != null) setWorldPos(M.bones[hi], M.restWP[hi].clone().add(new THREE.Vector3().fromArray(p.hipsPos).multiplyScalar(scale)));
-    // 人型でない骨の向きは、再生の姿（表示と同じ）での向きとして書かれている
-    const view = applyUnityView();
-    order.filter(([i]) => !M.humanSet.has(i)).forEach(place);
-    restoreUnityView(view);
+    const placeHips = () => { if (p.hipsPos && hi != null) setWorldPos(M.bones[hi], M.restWP[hi].clone().add(new THREE.Vector3().fromArray(p.hipsPos).multiplyScalar(scale))); };
+    if (M.generic) {
+      // 人型でないモデル: 骨の向きはそのまま。腰の上の骨も回っていることがあるので、位置は向きを全部決めてから
+      order.forEach(place);
+      placeHips();
+    } else {
+      order.filter(([i]) => M.humanSet.has(i)).forEach(place);
+      if (obj.restFrom === 'unity') unityBonesToRaw();
+      placeHips();
+      // 人型でない骨の向きは、再生の姿（表示と同じ）での向きとして書かれている
+      const view = applyUnityView();
+      order.filter(([i]) => !M.humanSet.has(i)).forEach(place);
+      restoreUnityView(view);
+    }
     const keyed = new Set(order.map(([i]) => i));
     if (hi != null) keyed.add(hi);
     for (const i of keyed) {
@@ -4909,7 +4926,12 @@ function scrubNumber(el, get, set) {
 }
 $('bAuto').onclick = () => { S.autoKey = !S.autoKey; updateButtons(); };
 $('bOnion').onclick = () => { S.onion = !S.onion; updateOnion(); updateButtons(); };
-$('bBones').onclick = () => { S.boneView = { human: 'all', all: 'none', none: 'human' }[S.boneView]; updateOnion(); updateButtons(); refreshBoneListVisibility(); };
+$('bBones').onclick = () => {
+  // 人型の骨がほとんど無いモデル（人型でないモデルなど）では「人型」を飛ばす（何も出ないので）
+  const human = !M || M.humanSet.size >= 10;
+  S.boneView = { human: 'all', all: 'none', none: human ? 'human' : 'all' }[S.boneView];
+  updateOnion(); updateButtons(); refreshBoneListVisibility();
+};
 $('bHelp').onclick = () => { renderHelp(); $('help').classList.add('show'); };
 $('bPose').onclick = e => {
   const r = e.target.getBoundingClientRect();
@@ -5213,6 +5235,7 @@ function renderHelp() {
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
   $('helpNote').textContent = (S.sample ? '「.anim保存」で、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '「.anim保存」で、Unityのプロジェクトに.animができる') +
     '。「プロジェクト保存」で.sismotionに残せる' +
+    (M?.generic ? '。人型でないモデルは、骨を回して作る（IK・手パッド・呼吸・上限は使えない。位置を動かせるのは、ルートと、ルートのすぐ下の骨）' : '') +
     (!EXPERIMENTAL ? '' : '。「相手」で2人目のアバターを出して一緒に再生できる。Qで動かすほうが入れ替わる。相手役は最初ロックされていて、クリックで触れない（「相手」のロックを外すと、相手の体のクリックで入れ替わり、「くっつける」が使える）');
 }
 
