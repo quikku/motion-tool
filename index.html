@@ -1017,8 +1017,8 @@ function headChain() {
   return M.headChain;
 }
 const hasHeadIK = () => !!M && headChain().length > 0;
-function syncHeadIK() {
-  if (!hasHeadIK() || (S.sel?.kind === 'head' && gizmo.dragging)) return;
+function syncHeadIK(force = false) {
+  if (!hasHeadIK() || (!force && S.sel?.kind === 'head' && gizmo.dragging)) return;
   const h = M.bones[M.human.Head];
   HEADIK.target.position.copy(wp(h));
   HEADIK.target.quaternion.copy(wq(h));
@@ -1044,6 +1044,7 @@ function solveHeadIK() {
     if (wp(head).distanceToSquared(t) < (M.size * 1e-4) ** 2) break;
   }
   setWorldQuat(head, endQ);
+  constrainBone(M.human.Head);
   for (const j of chain) S.edited.add(j);
   S.edited.add(M.human.Head);
 }
@@ -1171,8 +1172,9 @@ function solveLimb(L) {
     const ang = Math.atan2(to.dot(bp.clone().cross(pp)), bp.dot(pp));
     rotateWorld(A, new THREE.Quaternion().setFromAxisAngle(to, ang));
   }
-  // ④ 手先・足先のワールドの向きは保つ
+  // ④ 手先・足先のワールドの向きは保つ。ただし上限は超えない（超える分は止まり、的の向きとずれる）
   setWorldQuat(C, endQ);
+  constrainBone(L.c);
   S.edited.add(L.a); S.edited.add(L.b); S.edited.add(L.c);
 }
 
@@ -2021,6 +2023,13 @@ gizmo.addEventListener('objectChange', () => {
   updateUnkeyed();
 });
 gizmo.addEventListener('mouseUp', () => {
+  // 上限で止まった分、的の向きが手先とずれているので、動かし終えたら合わせ直す
+  if (M && (S.sel?.kind === 'ik' || S.sel?.kind === 'pole')) {
+    const L = M.limbs[S.sel.limb];
+    syncLimb(L);
+    const key = L.key.startsWith('Left') ? L.key.replace('Left', 'Right') : L.key.replace('Right', 'Left');
+    if (S.sym) { const R = M.limbs.find(x => x.key === key); if (R) syncLimb(R); }
+  } else if (M && S.sel?.kind === 'head') syncHeadIK(true); // mouseUp の間は、まだ dragging
   if (S.autoKey && S.edited.size) keyBones([...S.edited]);
   else { refreshKeysUI(); if (S.edited.size) markDirty(); }
 });
