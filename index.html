@@ -5690,7 +5690,10 @@ function jointAngles(J) {
   return { bend: Math.sign(y || 1) * (Math.PI - Math.asin(Math.abs(y))), spread: Math.atan2(-z, -x) };
 }
 
-/** 関節を曲げと開きの角度にする。付け根は骨の軸まわりにねじらない（自由度と同じ） */
+/**
+ * 関節を曲げと開きの角度にする。付け根は自由度の軸まわりにねじらない。
+ * 自由度の軸は骨の向きと少しずれるので、骨の向きを合わせるだけだと Unity が持てないねじりが混ざり、保存すると指ごと回る（親指で 10°）
+ */
 function setJointAngles(J, bend, spread) {
   const b = M.bones[J.i];
   let q;
@@ -5699,6 +5702,15 @@ function setJointAngles(J, bend, spread) {
     const v = J.dP.clone().multiplyScalar(Math.cos(bend) * Math.cos(spread))
       .addScaledVector(J.sP, Math.cos(bend) * Math.sin(spread)).addScaledVector(J.mP, Math.sin(bend)).normalize();
     q = new THREE.Quaternion().setFromUnitVectors(J.dP, v);
+    const dof = M.dof?.get(J.i);
+    if (dof?.kind === 'swing') {
+      // ねじりを外すと向きが少しずれるので、向きを合わせ直す、を繰り返す
+      for (let k = 0; k < 8; k++) {
+        q = swingTwist(q, dof.axis).swing;
+        q.premultiply(new THREE.Quaternion().setFromUnitVectors(J.dP.clone().applyQuaternion(q), v));
+      }
+      q = swingTwist(q, dof.axis).swing;
+    }
   }
   b.quaternion.copy(q.multiply(M.restQ[J.i])).normalize();
   b.updateMatrixWorld(true);
