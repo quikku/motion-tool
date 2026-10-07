@@ -113,6 +113,8 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 .pop .prow input[type=number] { width: 58px; }
 .pop { position: fixed; display: none; gap: 5px; align-items: center; background: var(--panel2); border: 1px solid #50545c; border-radius: 4px;
   padding: 6px 8px; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.4); white-space: nowrap; }
+#ikRows .prow { padding: 1px 0; }
+#ikRows .nm { width: 36px; }
 #handPad { position: absolute; right: 8px; top: 8px; width: 190px; background: rgba(37,39,43,.92); border: 1px solid var(--line);
   border-radius: 6px; display: none; z-index: 4; touch-action: none; }
 #handPad .hbar { display: flex; gap: 3px; align-items: center; padding: 3px 4px 0; }
@@ -147,7 +149,8 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bSpace" title="X">ローカル</button>
     <span class="sep"></span>
     <button id="bIK" title="手先・足先をIKで動かす">IK</button>
-    <button id="bPin" title="体を動かしても、IKの手先・足先をその場に残す">固定</button>
+    <button id="bIKList" title="IKごとに、出す・しまう・固定する">▾</button>
+    <button id="bPin" title="選んでいるIKを固定する（体を動かしても、その場に残す）">固定</button>
     <button id="bAuto" title="動かし終えたらキーを打つ">自動キー</button>
     <button id="bSym" title="左右の骨を一緒に動かす">対称</button>
     <button id="bLimit" title="首や手首などを回しすぎないようにする">上限</button>
@@ -214,6 +217,11 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 </div>
 <div id="ctx" class="menu"></div>
 <div id="breathPop" class="pop"><label><input id="brOn" type="checkbox">入れる</label><span>周期</span><input id="brPeriod" type="number" min="0.5" max="60" step="0.5"><span>秒</span><span>強さ</span><input id="brAmp" type="number" min="0" max="500" step="10"><span>%</span><span id="brNote" style="color:var(--dim)"></span></div>
+<div id="ikPop" class="pop col">
+  <div class="prow"><button id="ikAllShow">全部出す</button><button id="ikAllHide">全部しまう</button><button id="ikUnpin">固定を全部外す</button></div>
+  <div id="ikRows"></div>
+  <div class="prow" style="color:var(--dim)">固定したIKは、体を動かしてもその場に残る（赤い印）</div>
+</div>
 <div id="pairPop" class="pop col">
   <div class="prow"><span id="paName" style="color:var(--dim)"></span><span style="flex:1"></span><button id="paSwap" title="動かすほうを入れ替える（キーを打てるのは動かしているほうだけ）">⇄ 入れ替え</button></div>
   <div class="prow"><span>出す</span><button id="paSame" title="今のアバターをもう1体出す">同じアバター</button><button id="paUnityTab" title="Unityで開いた、ほかのアバターのタブから出す（衣装なども出る）">Unityの別のタブ…</button><button id="paFolder" title="FBXと画像が入ったフォルダを選ぶ">フォルダから…</button><button id="paFiles" title="FBXと画像（と .motiontool.json）をまとめて選ぶ">ファイルから…</button><button id="paDel">消す</button></div>
@@ -320,7 +328,7 @@ const S = {
   /** 茜犬の見本（Unityを通さずに .anim を書く）。Unity から開いたときは unity、どちらでもなければ（file:// など）モデルを出さない。 */
   sample: false, animHandle: null,
   frame: 0, playing: false, playT: 0, sel: null, edited: new Set(), shapeEdited: new Set(), shapeSel: null, tab: 'bones',
-  autoKey: true, ik: true, pin: false, falloff: false, falloffR: 10, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
+  autoKey: true, ik: true, falloff: false, falloffR: 10, space: 'local', mode: 'rotate', boneView: 'human', onion: false, unityView: true,
   dirty: false,
   /** 2 体いるとき、2 体目を動かしている */
   second: false,
@@ -974,7 +982,91 @@ function syncLimb(L) {
   L.pole.position.copy(defaultPole(L));
   L.pole.updateMatrixWorld(true);
 }
-function syncLimbs(except) { if (M) { for (const L of M.limbs) if (L !== except) syncLimb(L); syncLook(); } }
+function syncLimbs(except) { if (M) { for (const L of M.limbs) if (L !== except) syncLimb(L); syncHeadIK(); syncLook(); } }
+
+// ---------- IK ごとの設定（出す・しまう、固定）と頭の IK ----------
+
+/** IK の種類。Head は頭の位置（背骨から首を曲げて届かせる）、Look は頭の向きの的 */
+const IK_KINDS = [['Head', '頭'], ['Look', '視線'], ['LeftHand', '左手'], ['RightHand', '右手'], ['LeftFoot', '左足'], ['RightFoot', '右足']];
+S.ikOpt = (() => {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('mt.ikOpt') || '{}') || {}; } catch (e) { /* 無ければ既定 */ }
+  return Object.fromEntries(IK_KINDS.map(([k]) => [k, { show: saved[k]?.show !== false, pin: !!saved[k]?.pin }]));
+})();
+const saveIkOpt = () => { try { localStorage.setItem('mt.ikOpt', JSON.stringify(S.ikOpt)); } catch (e) { /* 覚えられなくてもいい */ } };
+const ikShown = key => S.ik && !!S.ikOpt[key]?.show;
+const ikPinned = key => S.ik && !!S.ikOpt[key]?.pin;
+/** 選んでいる物の IK の種類（IK でなければ null） */
+function ikKeyOfSel(sel = S.sel) {
+  if (!sel || !M) return null;
+  if (sel.kind === 'ik' || sel.kind === 'pole') return M.limbs[sel.limb]?.key ?? null;
+  if (sel.kind === 'head') return 'Head';
+  if (sel.kind === 'look') return 'Look';
+  return null;
+}
+
+const HEADIK = { target: new THREE.Object3D() };
+scene.add(HEADIK.target);
+/** 頭の IK で曲げる骨（腰に近いほうから首まで）。頭か背骨が無ければ空 */
+function headChain() {
+  if (!M.headChain) {
+    const H = M.human;
+    M.headChain = H.Head == null ? [] : ['Spine', 'Chest', 'UpperChest', 'Neck'].map(n => H[n]).filter(i => i != null && isAncestor(i, H.Head));
+  }
+  return M.headChain;
+}
+const hasHeadIK = () => !!M && headChain().length > 0;
+function syncHeadIK() {
+  if (!hasHeadIK() || (S.sel?.kind === 'head' && gizmo.dragging)) return;
+  const h = M.bones[M.human.Head];
+  HEADIK.target.position.copy(wp(h));
+  HEADIK.target.quaternion.copy(wq(h));
+  HEADIK.target.updateMatrixWorld(true);
+}
+
+/**
+ * 頭を的の位置へ。背骨から首までの骨に曲げを均等に分けて近づける（骨が動くと向きが変わるので何回か繰り返す）。
+ * 背骨と首は上限に収める。頭のワールドの向きは的の向きにする（手先の IK と同じ）
+ */
+function solveHeadIK() {
+  const chain = headChain(), head = M.bones[M.human.Head];
+  const t = HEADIK.target.position, endQ = HEADIK.target.quaternion.clone(), id = new THREE.Quaternion();
+  for (let it = 0; it < 8; it++) {
+    chain.forEach((j, k) => {
+      const p = wp(M.bones[j]);
+      const cur = wp(head).sub(p), want = t.clone().sub(p);
+      if (cur.lengthSq() < 1e-12 || want.lengthSq() < 1e-12) return;
+      const q = new THREE.Quaternion().setFromUnitVectors(cur.normalize(), want.normalize());
+      rotateWorld(M.bones[j], id.clone().slerp(q, 1 / (chain.length - k)));
+      constrainBone(j);
+    });
+    if (wp(head).distanceToSquared(t) < (M.size * 1e-4) ** 2) break;
+  }
+  setWorldQuat(head, endQ);
+  for (const j of chain) S.edited.add(j);
+  S.edited.add(M.human.Head);
+}
+
+/**
+ * 骨を動かしたあと、IK の的を今の骨に合わせる。固定した IK は、動かした骨がその根元より体の側にあれば、的の所へ解き直す。
+ * changed: 直接動かした骨。except: いま動かしている IK（的を合わせ直さない）
+ */
+function followPins(changed, except = null) {
+  const moved = root => changed.some(i => isAncestor(i, root));
+  if (hasHeadIK() && except !== 'Head') {
+    if (ikPinned('Head') && moved(headChain()[0])) { solveHeadIK(); changed = [...changed, ...headChain()]; }
+    else syncHeadIK();
+  }
+  for (const L of M.limbs) {
+    if (L.key === except) continue;
+    if (ikPinned(L.key) && moved(L.a)) solveLimb(L);
+    else syncLimb(L);
+  }
+  if (except !== 'Look' && M.human.Head != null) {
+    if (ikPinned('Look') && moved(M.human.Neck ?? M.human.Head)) solveLook();
+    else syncLook();
+  }
+}
 
 function defaultPole(L) {
   const a = wp(M.bones[L.a]), b = wp(M.bones[L.b]), c = wp(M.bones[L.c]);
@@ -1804,6 +1896,7 @@ function redo() {
 function select(sel) {
   S.sel = sel;
   attachGizmo();
+  updateButtons();
   refreshBoneListSel();
   const i = selectedBone();
   if (i >= 0) tlReveal('b' + i);
@@ -1827,6 +1920,9 @@ function attachGizmo() {
   } else if (S.sel.kind === 'look') {
     gizmo.setMode('translate');
     gizmo.attach(LOOK.target);
+  } else if (S.sel.kind === 'head') {
+    gizmo.setMode(S.mode);
+    gizmo.attach(HEADIK.target);
   }
   // ルートはいつもワールドの向きで動かす（ルートのローカルの軸はFBXのArmatureの軸で、寝ていることがある）
   gizmo.setSpace(S.sel.kind === 'bone' && S.sel.i === M.rootBone ? 'world' : S.space);
@@ -1835,7 +1931,7 @@ function attachGizmo() {
 function selectedBone() {
   if (!S.sel || !M) return -1;
   if (S.sel.kind === 'bone') return S.sel.i;
-  if (S.sel.kind === 'look') return M.human.Head ?? -1;
+  if (S.sel.kind === 'look' || S.sel.kind === 'head') return M.human.Head ?? -1;
   return M.limbs[S.sel.limb]?.c ?? -1;
 }
 
@@ -1848,16 +1944,13 @@ gizmo.addEventListener('objectChange', () => {
     constrainBone(i);
     M.bones[i].updateMatrixWorld(true);
     mirrorBoneEdit(i);
-    syncLook();
-    const own = limbOfBone(i);
-    for (const L of M.limbs) {
-      if (L === own) continue;
-      if (S.ik && S.pin && isAncestor(i, L.a)) solveLimb(L);
-      else syncLimb(L);
-    }
-    if (own) syncLimb(own);
+    followPins(S.sym ? [i, partnerOf(i)] : [i]);
   } else if (S.sel.kind === 'look') {
     solveLook();
+    followPins([M.human.Neck, M.human.Head].filter(b => b != null), 'Look');
+  } else if (S.sel.kind === 'head') {
+    solveHeadIK();
+    followPins([...headChain(), M.human.Head], 'Head');
   } else {
     solveLimb(M.limbs[S.sel.limb]);
     mirrorLimbEdit(M.limbs[S.sel.limb]);
@@ -1910,7 +2003,7 @@ function buildMarkers() {
   const n = M.bones.length;
   MK.points = mkPoints(n, 11, circleTex);
   MK.lines = mkLines(n, 0xc8d0e0, 0.45);
-  MK.handles = mkPoints(10, 13, null);
+  MK.handles = mkPoints(12, 13, null);
   MK.poleLines = mkLines(5, 0x9fd0ff, 0.5);
   for (const k of ['prev', 'next']) {
     if (onion[k]) { scene.remove(onion[k]); onion[k].geometry.dispose(); }
@@ -1921,7 +2014,8 @@ function buildMarkers() {
 
 function boneShown(i) {
   if (S.boneView === 'none' || i === M.rootBone) return false;
-  if (S.ik && M.limbs.some(L => L.c === i)) return false;
+  if (M.limbs.some(L => L.c === i && ikShown(L.key))) return false;
+  if (i === M.human.Head && ikShown('Head') && hasHeadIK()) return false;
   return S.boneView === 'all' || M.humanSet.has(i);
 }
 
@@ -1952,12 +2046,21 @@ function updateMarkers() {
   const plp = MK.poleLines.geometry.attributes.position;
   MK.hlist = [];
   let pl = 0;
+  const PIN = [0.95, 0.28, 0.28], SEL = [1, 0.54, 0.24];
   if (S.ik) {
+    // 頭の IK
+    if (ikShown('Head') && hasHeadIK()) {
+      const k = MK.hlist.length;
+      hp.setXYZ(k, HEADIK.target.position.x, HEADIK.target.position.y, HEADIK.target.position.z);
+      hc.setXYZ(k, ...(S.sel?.kind === 'head' ? SEL : ikPinned('Head') ? PIN : [0.35, 0.8, 1]));
+      MK.hlist.push({ kind: 'head' });
+    }
     M.limbs.forEach((L, li) => {
+      if (!ikShown(L.key)) return;
       const selT = S.sel?.kind === 'ik' && S.sel.limb === li, selP = S.sel?.kind === 'pole' && S.sel.limb === li;
       let k = MK.hlist.length;
       hp.setXYZ(k, L.target.position.x, L.target.position.y, L.target.position.z);
-      hc.setXYZ(k, ...(selT ? [1, 0.54, 0.24] : [0.35, 0.8, 1]));
+      hc.setXYZ(k, ...(selT ? SEL : ikPinned(L.key) ? PIN : [0.35, 0.8, 1]));
       MK.hlist.push({ kind: 'ik', limb: li });
       k++;
       hp.setXYZ(k, L.pole.position.x, L.pole.position.y, L.pole.position.z);
@@ -1968,10 +2071,10 @@ function updateMarkers() {
       plp.setXYZ(pl++, L.pole.position.x, L.pole.position.y, L.pole.position.z);
     });
     // 桃色 = 頭の向きの的
-    if (M.human.Head != null) {
+    if (M.human.Head != null && ikShown('Look')) {
       const k = MK.hlist.length;
       hp.setXYZ(k, LOOK.target.position.x, LOOK.target.position.y, LOOK.target.position.z);
-      hc.setXYZ(k, ...(S.sel?.kind === 'look' ? [1, 0.54, 0.24] : [0.95, 0.6, 0.9]));
+      hc.setXYZ(k, ...(S.sel?.kind === 'look' ? SEL : ikPinned('Look') ? PIN : [0.95, 0.6, 0.9]));
       MK.hlist.push({ kind: 'look' });
       const e = eyePos();
       plp.setXYZ(pl++, e.x, e.y, e.z);
@@ -2081,8 +2184,9 @@ function markerAt(x, y) {
     const d = Math.hypot(s.x - x, s.y - y);
     if (d <= radius && (!best || d < best.d)) best = { d, sel };
   };
-  if (S.ik) M.limbs.forEach((L, li) => { tryHit(L.target.position, { kind: 'ik', limb: li }, 10); tryHit(L.pole.position, { kind: 'pole', limb: li }, 9); });
-  if (S.ik && M.human.Head != null) tryHit(LOOK.target.position, { kind: 'look' }, 10);
+  M.limbs.forEach((L, li) => { if (ikShown(L.key)) { tryHit(L.target.position, { kind: 'ik', limb: li }, 10); tryHit(L.pole.position, { kind: 'pole', limb: li }, 9); } });
+  if (ikShown('Look') && M.human.Head != null) tryHit(LOOK.target.position, { kind: 'look' }, 10);
+  if (ikShown('Head') && hasHeadIK()) tryHit(HEADIK.target.position, { kind: 'head' }, 10);
   if (M.rootBone >= 0 && S.boneView !== 'none') tryHit(wp(M.bones[M.rootBone]), { kind: 'bone', i: M.rootBone }, 10);
   if (!best) for (const i of MK.list) tryHit(wp(M.bones[i]), { kind: 'bone', i }, 9);
   return best ? best.sel : null;
@@ -2114,7 +2218,8 @@ function pick(x, y) {
   for (const h of hits) {
     const i = boneAtHit(h);
     if (i < 0) continue;
-    const L = S.ik ? M.limbs.findIndex(l => l.c === i) : -1;
+    const L = M.limbs.findIndex(l => l.c === i && ikShown(l.key));
+    if (L < 0 && i === M.human.Head && ikShown('Head') && hasHeadIK()) { select({ kind: 'head' }); return; }
     select(L >= 0 ? { kind: 'ik', limb: L } : { kind: 'bone', i });
     return;
   }
@@ -2300,6 +2405,7 @@ function keySelected() {
   let bones = [...S.edited];
   if (S.sel?.kind === 'ik' || S.sel?.kind === 'pole') { const L = M.limbs[S.sel.limb]; bones.push(L.a, L.b, L.c); }
   else if (S.sel?.kind === 'look') bones.push(...[M.human.Neck, M.human.Head].filter(b => b != null));
+  else if (S.sel?.kind === 'head') bones.push(...headChain(), M.human.Head);
   else if (i >= 0 && S.tab === 'bones') bones.push(i);
   bones = [...new Set(bones)];
   if (!bones.length && !shapes.length) { setStatus('骨かシェイプを選んでください'); return; }
@@ -3149,7 +3255,8 @@ function updateButtons() {
   $('bRot').classList.toggle('on', S.mode === 'rotate');
   $('bSpace').textContent = S.space === 'local' ? 'ローカル' : 'ワールド';
   $('bIK').classList.toggle('on', S.ik);
-  $('bPin').classList.toggle('on', S.pin);
+  const ikSel = ikKeyOfSel();
+  $('bPin').classList.toggle('on', !!ikSel && !!S.ikOpt?.[ikSel]?.pin);
   $('bPin').disabled = !S.ik;
   $('bAuto').classList.toggle('on', S.autoKey);
   $('bSym').classList.toggle('on', !!S.sym);
@@ -4607,11 +4714,69 @@ $('bRot').onclick = () => setMode('rotate');
 $('bSpace').onclick = () => { S.space = S.space === 'local' ? 'world' : 'local'; gizmo.setSpace(S.space); updateButtons(); };
 $('bIK').onclick = () => {
   S.ik = !S.ik;
-  if (!S.ik && S.sel && S.sel.kind !== 'bone') select({ kind: 'bone', i: S.sel.kind === 'look' ? M.human.Head : M.limbs[S.sel.limb].c });
+  if (!S.ik) leaveHiddenIk();
   syncLimbs();
   updateButtons();
+  refreshIkPop();
 };
-$('bPin').onclick = () => { S.pin = !S.pin; updateButtons(); };
+/** 選んでいる IK がしまわれた（か IK を切った）ら、その骨を選ぶ */
+function leaveHiddenIk() {
+  const k = ikKeyOfSel();
+  if (!k || ikShown(k)) return;
+  select({ kind: 'bone', i: S.sel.kind === 'look' || S.sel.kind === 'head' ? M.human.Head : M.limbs[S.sel.limb].c });
+}
+$('bPin').onclick = () => {
+  const k = ikKeyOfSel();
+  if (!k) { setStatus('固定するIK（手先・足先・頭の四角か、視線の的）を選んでください。「▾」からも固定できます'); return; }
+  setIkOpt(k, 'pin', !S.ikOpt[k].pin);
+  setStatus(`${IK_KINDS.find(x => x[0] === k)[1]}のIKを${S.ikOpt[k].pin ? '固定しました（体を動かしても、その場に残る）' : '固定から外しました'}`);
+};
+function setIkOpt(k, what, v) {
+  S.ikOpt[k][what] = v;
+  saveIkOpt();
+  if (M && what === 'show') { leaveHiddenIk(); syncLimbs(); }
+  updateButtons();
+  refreshIkPop();
+}
+function refreshIkPop() {
+  const rows = $('ikRows');
+  if (!rows || $('ikPop').style.display !== 'flex') return;
+  rows.innerHTML = '';
+  for (const [k, label] of IK_KINDS) {
+    if (M && (k === 'Head' ? !hasHeadIK() : k === 'Look' ? M.human.Head == null : !M.limbs.some(L => L.key === k))) continue;
+    const row = document.createElement('div');
+    row.className = 'prow';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = label;
+    row.appendChild(nm);
+    for (const [what, text] of [['show', '出す'], ['pin', '固定']]) {
+      const lb = document.createElement('label'), cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = S.ikOpt[k][what];
+      cb.disabled = !S.ik;
+      cb.onchange = () => setIkOpt(k, what, cb.checked);
+      lb.append(cb, text);
+      row.appendChild(lb);
+    }
+    rows.appendChild(row);
+  }
+  for (const id of ['ikAllShow', 'ikAllHide', 'ikUnpin']) $(id).disabled = !S.ik;
+}
+$('bIKList').onclick = () => {
+  const pop = $('ikPop');
+  if (pop.style.display === 'flex') { pop.style.display = 'none'; return; }
+  const r = $('bIKList').getBoundingClientRect();
+  Object.assign(pop.style, { display: 'flex', left: r.left + 'px', top: r.bottom + 4 + 'px' });
+  refreshIkPop();
+};
+const setAllIk = (what, v) => { for (const [k] of IK_KINDS) S.ikOpt[k][what] = v; setIkOpt('Head', what, v); };
+$('ikAllShow').onclick = () => setAllIk('show', true);
+$('ikAllHide').onclick = () => setAllIk('show', false);
+$('ikUnpin').onclick = () => setAllIk('pin', false);
+document.addEventListener('pointerdown', e => {
+  if (!e.target.closest('#ikPop, #bIKList')) $('ikPop').style.display = 'none';
+});
 $('bFalloff').onclick = () => { S.falloff = !S.falloff; updateButtons(); drawTimeline(); };
 const setFalloffR = v => { S.falloffR = Math.max(1, Math.round(v) || 10); $('falloffR').value = S.falloffR; drawTimeline(); };
 $('falloffR').value = S.falloffR;
@@ -4736,7 +4901,7 @@ const ACTIONS = [
   ['copy', 'コピー', 'Ctrl+KeyC'], ['paste', '貼り付け', 'Ctrl+KeyV'], ['pasteMirror', '反転して貼り付け', 'Ctrl+Shift+KeyV'],
   ['save', '.anim保存', 'Ctrl+KeyS'], ['saveAs', '.anim別名保存', 'Ctrl+Shift+KeyS'],
   ['saveProj', 'プロジェクト保存', 'Ctrl+Alt+KeyS'], ['openProj', '開く', 'Ctrl+KeyO'], ['newDoc', '新規', ''],
-  ['ik', 'IKの入 / 切', ''], ['pin', '固定の入 / 切', ''], ['falloff', '伝染の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
+  ['ik', 'IKの入 / 切', ''], ['pin', '選んだIKの固定の入 / 切', ''], ['falloff', '伝染の入 / 切', ''], ['autoKey', '自動キーの入 / 切', ''],
   ['onion', 'オニオンの入 / 切', ''], ['boneView', '骨の表示を切り替え', ''],
   ['mirrorAll', '全身を反転', ''], ['mirrorSel', '選んだ骨を反対側へ', ''],
   ['swapActor', '動かすアバターを入れ替え（相手役）', 'KeyQ'],
@@ -4950,6 +5115,7 @@ function renderHelp() {
   add('ホイール', '寄る・引く');
   add('右クリック', 'その場所のメッシュ（服など）を隠す。「表示」タブでも切り替え');
   add('緑の四角', 'ルート。全体の移動と回転（腰から下がまとめて動く）');
+  add('IK', '水色の四角（手先・足先・頭）を動かすと、腕・脚・背骨と首が付いてくる。桃色の四角は頭の向きの的。ツールバーの「▾」で、IKごとに出す・しまう・固定する。固定したIK（赤）は、体を動かしてもその場に残る');
   add('手パッド', '手首か指を選ぶと右上に出る。赤い所を縦にドラッグで関節を曲げる（Shiftで指全体、手のひらで4本まとめて）、青い所を横にドラッグで指を開く。クリックでその骨を選ぶ');
   for (const [id, label] of ACTIONS) if (CFG.keys[id]) add(keyLabel(id), label);
   add('目盛り', 'ドラッグでフレーム、右端の印で長さ、ホイールで拡大、ダブルクリックで全体');
@@ -5638,7 +5804,7 @@ refreshBreathUI();
 refreshVideoUI();
 
 // 確認用（コンソールから触る）
-window.MTP = { V, applyLimits, limitOf, poseAt, applyBreath, breathWave, breathCycle, openVideo, LOOK, solveLook, syncLook, mirrorBoneEdit, mirrorLimbEdit, eyePos, headForward, handRig, jointAngles, setJointAngles, HP };
+window.MTP = { V, applyLimits, limitOf, poseAt, applyBreath, breathWave, breathCycle, openVideo, LOOK, solveLook, syncLook, mirrorBoneEdit, mirrorLimbEdit, eyePos, headForward, handRig, jointAngles, setJointAngles, HP, HEADIK, select, gizmo, model: () => M };
 
 // ================================================================
 //  ループ
