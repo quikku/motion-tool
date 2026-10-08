@@ -162,6 +162,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bOnion" title="前後のキーの骨を重ねる">オニオン</button>
     <button id="bHand" title="手首か指を選んだとき、指を曲げる・開くパッドを出す">手パッド</button>
     <button id="bBreath">呼吸</button>
+    <button id="bNat" title="動きの補正（実験的な機能）" style="display:none">補正</button>
     <button id="bVideo">動画</button>
     <button id="bPair" title="2人目のアバター（相手役）を出して、同じタイムラインで一緒に再生する">相手 ▾</button>
     <button id="bWho" title="動かすほうを入れ替える（ロックを外していれば、相手役の体のクリックでも入れ替わる）" style="display:none"></button>
@@ -217,6 +218,13 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 </div>
 <div id="ctx" class="menu"></div>
 <div id="breathPop" class="pop"><label><input id="brOn" type="checkbox">入れる</label><span>周期</span><input id="brPeriod" type="number" min="0.5" max="60" step="0.5"><span>秒</span><span>強さ</span><input id="brAmp" type="number" min="0" max="500" step="10"><span>%</span><span id="brNote" style="color:var(--dim)"></span></div>
+<div id="natPop" class="pop col">
+  <label><input id="naFoot" type="checkbox">足のすべり止め</label>
+  <label><input id="naCom" type="checkbox">重心を足の上に</label>
+  <label><input id="naAir" type="checkbox">空中は放物線</label>
+  <div class="prow"><label><input id="naLag" type="checkbox">遅れ</label><span>強さ</span><input id="naLagAmt" type="number" min="0" max="300" step="10"><span>%</span></div>
+  <div class="prow" style="color:var(--dim)">再生と保存のときだけ効く</div>
+</div>
 <div id="ikPop" class="pop col">
   <div class="prow"><button id="ikAllShow">全部出す</button><button id="ikAllHide">全部しまう</button><button id="ikUnpin">固定を全部外す</button></div>
   <div id="ikRows"></div>
@@ -320,7 +328,7 @@ let M = null; // モデル（2 体いるときは、今動かしているほう�
 /** 今動かしているアバターの入れ物。いつも原点に置く（もう 1 体は P.wrap で、こちらから見た位置に置く） */
 let ownWrap = new THREE.Group();
 scene.add(ownWrap);
-let D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } };
+let D = { name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 }, natural: natDefaults() };
 let docVer = 0;
 const S = {
   /** Unityから開いたとき: { path: 保存先の.anim（まだ無ければnull）, dir: 保存先の候補のフォルダ }。 */
@@ -1143,10 +1151,9 @@ function defaultPole(L) {
 
 function rotateWorld(o, q) { setWorldQuat(o, q.clone().multiply(wq(o))); }
 
-function solveLimb(L) {
+/** t・p・endQ: 先端の行き先・ポール・先端の向き（省くと IK の的の物） */
+function solveLimb(L, t = L.target.position.clone(), p = L.pole.position.clone(), endQ = L.target.quaternion.clone()) {
   const A = M.bones[L.a], B = M.bones[L.b], C = M.bones[L.c];
-  const t = L.target.position.clone(), p = L.pole.position.clone();
-  const endQ = L.target.quaternion.clone();
   const a = wp(A), b = wp(B), c = wp(C);
   const l1 = a.distanceTo(b), l2 = b.distanceTo(c);
   const dist = clamp(t.distanceTo(a), Math.abs(l1 - l2) + (l1 + l2) * 1e-4, (l1 + l2) * 0.9999);
@@ -1850,7 +1857,7 @@ function evalShape(t, f) {
   return hermite(u, dt, y[i], m[i], y[i + 1], m[i + 1]);
 }
 
-/** 骨とシェイプをキーのとおりにする（キーの無いものは元のまま）。breath: 呼吸の揺れも足す（再生と保存だけ） */
+/** 骨とシェイプをキーのとおりにする（キーの無いものは元のまま）。breath: 呼吸の揺れと動きの補正も足す（再生と保存だけ） */
 function poseAt(f, breath = false) {
   for (let i = 0; i < M.bones.length; i++) {
     const b = M.bones[i], t = D.tracks.get(i);
@@ -1867,6 +1874,7 @@ function poseAt(f, breath = false) {
   }
   M.root.updateMatrixWorld(true);
   if (breath) applyBreath(f);
+  if (breath && !NAT.building && natOn()) natApplyAt(natData(), f);
 }
 
 function applyRest() {
@@ -3363,6 +3371,7 @@ function updateButtons() {
   $('bBones').textContent = '骨: ' + { human: '人型', all: 'すべて', none: 'なし' }[S.boneView];
   $('bPlay').textContent = S.playing ? '■' : '▶';
   $('bBreath').classList.toggle('on', D.breath.on);
+  $('bNat').classList.toggle('on', natAny());
 }
 
 // ================================================================
@@ -3412,9 +3421,12 @@ function buildFile() {
   // 呼吸の揺れはキーの外なので、その骨も毎フレーム書く
   const breathing = tracked.length ? breathBones() : [];
   if (breathing.length) for (let f = 0; f <= D.frameCount; f++) frames.add(f);
+  // 動きの補正も同じ
+  const natural = tracked.length ? natBones() : [];
+  if (natural.length) for (let f = 0; f <= D.frameCount; f++) frames.add(f);
   const startMode = startInterp();
   // ルートは骨として書かない（FBXに無い）。ルートの動きは、腰のワールドの向きと位置に入って出ていく
-  const written = [...new Set([...tracked, ...breathing])].sort((a, b) => a - b).filter(i => i !== M.rootBone);
+  const written = [...new Set([...tracked, ...breathing, ...natural])].sort((a, b) => a - b).filter(i => i !== M.rootBone);
   if (tracked.includes(M.rootBone) && !written.includes(M.hips)) { written.push(M.hips); written.sort((a, b) => a - b); }
   const poses = [...frames].sort((a, b) => a - b).map(f => {
     poseAt(f, true);
@@ -3467,6 +3479,7 @@ function buildFile() {
     shapes: shapeKeys,
     interp: [...D.interp].filter(([f]) => real.has(f)),
     breath: { ...D.breath },
+    natural: { ...D.natural },
   };
 }
 
@@ -3929,7 +3942,7 @@ function docData() {
   const refZero = M?.unityInfo?.zeroPose ? retargetRef(true) : null;
   return {
     format: PROJECT_FORMAT, version: 1, model: M?.name ?? null, name: D.name,
-    fps: D.fps, frameCount: D.frameCount, loop: D.loop, breath: { ...D.breath },
+    fps: D.fps, frameCount: D.frameCount, loop: D.loop, breath: { ...D.breath }, natural: { ...natDefaults(), ...D.natural },
     tracks: [...D.tracks].filter(([, t]) => t.keys.length).map(([i, t]) => ({
       bone: M.names[i], keys: t.keys.map(k => ({ f: k.f, q: k.q.toArray(), ...(k.p ? { p: k.p.toArray() } : {}) })),
       ...(ref.humanOf.has(i) ? {
@@ -3988,7 +4001,7 @@ function readProject(obj) {
   return {
     doc: {
       name: obj.name || 'NewMotion', fps: obj.fps || 30, frameCount: Math.max(1, obj.frameCount || 60), loop: obj.loop !== false,
-      breath: { on: false, period: 4, amp: 100, ...(obj.breath || {}) }, tracks, shapes, interp,
+      breath: { on: false, period: 4, amp: 100, ...(obj.breath || {}) }, natural: { ...natDefaults(), ...(obj.natural || {}) }, tracks, shapes, interp,
     },
     missing,
   };
@@ -4100,7 +4113,7 @@ let contact = null;
 /** アバターごとに持つ S の中身（入れ替えるときに一緒に替える） */
 const ACTOR_STATE = ['sel', 'edited', 'shapeEdited', 'shapeSel', 'boneView', 'animHandle', 'avatarId', 'src'];
 
-const newDocData = () => ({ name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 } });
+const newDocData = () => ({ name: 'NewMotion', fps: 30, frameCount: 60, loop: true, tracks: new Map(), shapes: new Map(), interp: new Map(), breath: { on: false, period: 4, amp: 100 }, natural: natDefaults() });
 
 /**
  * fn のあいだだけ、M・D を相手役のものにする。fn の中で await しない（そのあいだに描画などが走ると混ざる）。
@@ -4656,6 +4669,7 @@ function applyMotionJson(obj, fileName) {
   D.frameCount = Math.max(1, obj.frameCount || 60);
   D.loop = !!obj.loop;
   D.breath = { on: false, period: 4, amp: 100, ...(obj.breath || {}) };
+  D.natural = { ...natDefaults(), ...(obj.natural || {}) };
   D.name = clipNameOf(fileName);
   D.tracks.clear();
   D.shapes.clear();
@@ -4964,7 +4978,7 @@ function newDoc() {
   D.shapes.clear();
   D.interp.clear();
   D.name = 'NewMotion';
-  Object.assign(D, { fps: 30, frameCount: 60, loop: true, breath: { on: false, period: 4, amp: 100 } });
+  Object.assign(D, { fps: 30, frameCount: 60, loop: true, breath: { on: false, period: 4, amp: 100 }, natural: natDefaults() });
   refreshBreathUI();
   docVer++;
   S.animHandle = null;
@@ -5179,6 +5193,7 @@ function renderSettings() {
   ex.appendChild(exLab);
   body.appendChild(ex);
   body.appendChild(el('div', 'note', '相手役（2人目のアバター）。ツールバーに「相手 ▾」が出る'));
+  body.appendChild(el('div', 'note', '動きの補正。ツールバーに「補正」が出る'));
 
   const foot = el('div', 'setrow');
   const reset = el('button', null, '初期設定に戻す');
@@ -5193,12 +5208,13 @@ function closeSettings() { keyCapture = null; $('settings').classList.remove('sh
 $('settings').onclick = e => { if (e.target === $('settings')) closeSettings(); };
 $('bSettings').onclick = openSettings;
 
-// ---------- 実験的な機能（設定の下）。オフのときは相手役のボタンを出さない ----------
+// ---------- 実験的な機能（設定の下）。オフのときは相手役と補正のボタンを出さない（補正も効かない） ----------
 let EXPERIMENTAL = false;
 try { EXPERIMENTAL = localStorage.getItem('motiontool.experimental') === '1'; } catch (e) { /* 覚えられなくてもオフで動く */ }
 function applyExperimental() {
   $('bPair').style.display = EXPERIMENTAL ? '' : 'none';
-  if (!EXPERIMENTAL) $('pairPop').style.display = 'none';
+  $('bNat').style.display = EXPERIMENTAL ? '' : 'none';
+  if (!EXPERIMENTAL) { $('pairPop').style.display = 'none'; $('natPop').style.display = 'none'; }
   renderHelp();
 }
 /** オフにするとき、出ている相手役は消すが、置き場所と動きは保存に残す（オンに戻すと戻る） */
@@ -5236,7 +5252,7 @@ function renderHelp() {
   $('helpNote').textContent = (S.sample ? '「.anim保存」で、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '「.anim保存」で、Unityのプロジェクトに.animができる') +
     '。「プロジェクト保存」で.sismotionに残せる' +
     (M?.generic ? '。人型でないモデルは、骨を回して作る（IK・手パッド・呼吸・上限は使えない。位置を動かせるのは、ルートと、ルートのすぐ下の骨）' : '') +
-    (!EXPERIMENTAL ? '' : '。「相手」で2人目のアバターを出して一緒に再生できる。Qで動かすほうが入れ替わる。相手役は最初ロックされていて、クリックで触れない（「相手」のロックを外すと、相手の体のクリックで入れ替わり、「くっつける」が使える）');
+    (!EXPERIMENTAL ? '' : '。「相手」で2人目のアバターを出して一緒に再生できる。Qで動かすほうが入れ替わる。相手役は最初ロックされていて、クリックで触れない（「相手」のロックを外すと、相手の体のクリックで入れ替わり、「くっつける」が使える）。「補正」は足のすべり・重心・空中・遅れを直す（再生と保存のときだけ）');
 }
 
 window.addEventListener('keydown', e => {
@@ -5350,6 +5366,684 @@ $('brPeriod').onchange = e => changeBreath(() => { D.breath.period = clamp(Numbe
 $('brAmp').onchange = e => changeBreath(() => { D.breath.amp = clamp(Number(e.target.value) || 0, 0, 500); });
 document.addEventListener('pointerdown', e => {
   if (!e.target.closest('#breathPop, #bBreath')) $('breathPop').style.display = 'none';
+});
+
+// ---------- 動きの補正（実験的な機能。呼吸と同じく、キーの上に足す。再生と保存のときだけ） ----------
+// 足のすべり止め: 床に着いている足が、床の上で滑った分を打ち消す（脚は IK で解き直す）
+// 重心: 足が着いている間、重心が足の範囲から出たら腰を水平に寄せる。動いているときは勢いの分を見込んだ点
+//   （ZMP = 重心 − 高さ × 水平の加速度 ÷（重力 ＋ 上下の加速度））で決める。歩くときは、重心そのものは足の外を通るため
+// 空中は放物線: 両足とも浮いている間、重心の上下を重力どおりにする
+// 遅れ: 胸・頭・腕が、親の骨から少し遅れて付いていき、止まるときに少し行き過ぎて戻る（ワールドの向きのばね）
+// 前後のフレームを見て決めるので、全フレーム分を先に計算しておく（natData）
+
+function natDefaults() { return { foot: false, com: false, air: false, lag: false, lagAmt: 100 }; }
+function natAny() { const n = D.natural; return !!n && (n.foot || n.com || n.air || (n.lag && n.lagAmt > 0)); }
+/** 人型でないモデルでは効かない（足・腰・腕を人型の骨で探すため） */
+function natOn() { return EXPERIMENTAL && !!M && !M.generic && natAny(); }
+
+/**
+ * 遅らせる骨（候補の先頭にある物）と、ばねの固さ（1 秒に揺れる回数）。左右があるものは両方。
+ * 遅れは親から子へ重なるので、背骨と首は 1 本ずつだけにする
+ */
+const NAT_LAG = [[['Chest', 'UpperChest', 'Spine'], 6], [['Head', 'Neck'], 4.5], [['UpperArm'], 4, true], [['LowerArm'], 6, true], [['Hand'], 7, true]];
+const NAT_DAMP = 0.55;
+/** 骨ごとの遅れの上限（ラジアン）。これに近づくほど伸びにくくなる */
+const NAT_LAG_CAP = 30 * Math.PI / 180;
+const natEase = t => t * t * (3 - 2 * t);
+
+function natLagBones() {
+  const out = [];
+  for (const [names, hz, sided] of NAT_LAG) {
+    for (const s of sided ? ['Left', 'Right'] : ['']) {
+      const i = names.map(n => M.human[s + n]).find(j => j != null && j !== M.hips);
+      if (i != null) out.push([i, hz]);
+    }
+  }
+  return out.sort((a, b) => M.depth[a[0]] - M.depth[b[0]]);
+}
+/** つま先の骨。人型の割り当てに無ければ（Unity の Avatar では省ける）、足の子で足首から離れた骨。無ければ -1 */
+function natToe(side) {
+  const t = M.human[side + 'Toes'], f = M.human[side + 'Foot'];
+  if (t != null) return t;
+  if (f == null) return -1;
+  return M.children[f].find(k => M.restWP[k].distanceTo(M.restWP[f]) > 0.02 * M.size) ?? -1;
+}
+/** 脚の IK と、つま先の骨（無ければ -1） */
+function natLegs() {
+  return M.limbs.filter(L => !L.arm).map(L => ({ L, toe: natToe(L.key.replace('Foot', '')) }));
+}
+/** 補正で動く骨（保存のとき、毎フレーム書く） */
+function natBones() {
+  if (!natOn()) return [];
+  const n = D.natural, out = new Set();
+  if (n.lag && n.lagAmt > 0) for (const [i] of natLagBones()) out.add(i);
+  // 足・重心・空中は、腰を動かして脚を解き直す
+  if (n.foot || n.com || n.air) {
+    for (const { L } of natLegs()) { out.add(L.a); out.add(L.b); out.add(L.c); }
+    out.add(M.hips);
+  }
+  return [...out];
+}
+
+/** 今の姿の重心。体の各部の重さ（体重に対する割合）と位置は、人の体の平均 */
+function natCom() {
+  const H = M.human, P = n => wp(M.bones[H[n]]), has = (...n) => n.every(k => H[k] != null);
+  const mid = (a, b, t) => P(a).lerp(P(b), t);
+  const c = new THREE.Vector3();
+  let m = 0;
+  const add = (w, p) => { c.addScaledVector(p, w); m += w; };
+  if (has('Hips', 'LeftUpperLeg', 'RightUpperLeg')) add(0.142, P('Hips').lerp(mid('LeftUpperLeg', 'RightUpperLeg', 0.5), 0.5));
+  const chest = H.Chest != null ? 'Chest' : H.UpperChest != null ? 'UpperChest' : null;
+  if (chest && has('Spine')) add(0.139, mid('Spine', chest, 0.5));
+  if (chest && has('Neck')) add(0.216, mid(chest, 'Neck', 0.5));
+  if (has('Head', 'Neck')) { const h = P('Head'); add(0.081, h.clone().add(h.clone().sub(P('Neck')).normalize().multiplyScalar(0.06 * M.size))); }
+  for (const s of ['Left', 'Right']) {
+    if (has(s + 'UpperArm', s + 'LowerArm')) add(0.028, mid(s + 'UpperArm', s + 'LowerArm', 0.436));
+    if (has(s + 'LowerArm', s + 'Hand')) add(0.016, mid(s + 'LowerArm', s + 'Hand', 0.43));
+    if (has(s + 'Hand')) add(0.006, has(s + 'MiddleProximal') ? mid(s + 'Hand', s + 'MiddleProximal', 0.5) : P(s + 'Hand'));
+    if (has(s + 'UpperLeg', s + 'LowerLeg')) add(0.1, mid(s + 'UpperLeg', s + 'LowerLeg', 0.433));
+    if (has(s + 'LowerLeg', s + 'Foot')) add(0.0465, mid(s + 'LowerLeg', s + 'Foot', 0.433));
+    const toe = natToe(s);
+    if (has(s + 'Foot')) add(0.0145, toe >= 0 ? P(s + 'Foot').lerp(wp(M.bones[toe]), 0.5) : P(s + 'Foot'));
+  }
+  return m > 0 ? c.multiplyScalar(1 / m) : wp(M.bones[M.hips]);
+}
+
+/** 床に着いているとみなす高さ（元のポーズの足首・つま先の高さから） */
+const natThr = () => 0.025 * M.size;
+/** 足首とつま先の、元のポーズからの高さの低いほう */
+function natHeight(g, A, T) {
+  const h = A.y - M.restWP[g.L.c].y;
+  return T ? Math.min(h, T.y - M.restWP[g.toe].y) : h;
+}
+/** 足の裏の範囲の角（床の上の x と z）。足首 A とつま先 T から、かかと・指の付け根の両側・指先を足の長さの割合で決める */
+function natSole(A, T) {
+  const d = T ? new THREE.Vector2(T.x - A.x, T.z - A.z) : new THREE.Vector2();
+  const len = d.length();
+  if (len < 0.01 * M.size) {
+    const r = 0.04 * M.size;
+    return [[r, r], [r, -r], [-r, -r], [-r, r]].map(([x, z]) => new THREE.Vector2(A.x + x, A.z + z));
+  }
+  d.multiplyScalar(1 / len);
+  const pt = (o, along, side) => new THREE.Vector2(o.x + d.x * along - d.y * side, o.z + d.y * along + d.x * side);
+  return [pt(A, -0.35 * len, 0.25 * len), pt(A, -0.35 * len, -0.25 * len), pt(T, 0, 0.35 * len), pt(T, 0, -0.35 * len), pt(T, 0.45 * len, 0)];
+}
+const natCross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+/** 凸包（反時計回り） */
+function natHull(pts) {
+  const p = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const half = list => {
+    const h = [];
+    for (const q of list) { while (h.length >= 2 && natCross(h[h.length - 2], h[h.length - 1], q) <= 0) h.pop(); h.push(q); }
+    h.pop();
+    return h;
+  };
+  const lower = half(p);
+  return lower.concat(half(p.reverse()));
+}
+const natInside = (h, q) => h.length >= 3 && h.every((a, k) => natCross(a, h[(k + 1) % h.length], q) >= 0);
+/** 点 q を凸包 h の中へ寄せた点（中ならそのまま）。縁ちょうどにならないよう、少しだけ内側に入れる */
+function natIntoHull(h, q) {
+  if (h.length < 3 || natInside(h, q)) return q.clone();
+  let best = null, bd = Infinity;
+  h.forEach((a, k) => {
+    const ab = h[(k + 1) % h.length].clone().sub(a);
+    const t = clamp(q.clone().sub(a).dot(ab) / Math.max(1e-12, ab.lengthSq()), 0, 1);
+    const p = a.clone().addScaledVector(ab, t), d = p.distanceToSquared(q);
+    if (d < bd) { bd = d; best = p; }
+  });
+  const toMid = h.reduce((s, a) => s.add(a), new THREE.Vector2()).multiplyScalar(1 / h.length).sub(best);
+  const m = Math.min(0.01 * M.size, toMid.length() * 0.5);
+  return toMid.lengthSq() > 1e-12 ? best.addScaledVector(toMid.normalize(), m) : best;
+}
+
+/** 回転 → 回転ベクトル（軸 × 角度。短いほうの回り方） */
+function natRotVec(q) {
+  let { x, y, z, w } = q;
+  if (w < 0) { x = -x; y = -y; z = -z; w = -w; }
+  const s = Math.hypot(x, y, z);
+  if (s < 1e-12) return new THREE.Vector3(2 * x, 2 * y, 2 * z);
+  return new THREE.Vector3(x, y, z).multiplyScalar(2 * Math.atan2(s, w) / s);
+}
+function natQuatOf(v) {
+  const a = v.length();
+  return a < 1e-12 ? new THREE.Quaternion() : new THREE.Quaternion().setFromAxisAngle(v.clone().multiplyScalar(1 / a), a);
+}
+
+/** 区間で並べた値の、フレーム f（小数でもよい）での値。ループなら N は 0 と同じ */
+function natAt(c, f) {
+  const t = c.loop ? ((f % c.n) + c.n) % c.n : clamp(f, 0, c.n);
+  const i0 = Math.floor(t);
+  return { i0, i1: Math.min(i0 + 1, c.n), u: t - i0 };
+}
+
+/** 床に着いている区間 [s, e]。ループなら、浮いているフレームから数え始める（区間が最後と最初をまたいでも 1 つになる。番号は len を超えることがある） */
+function natRuns(on, len, loop) {
+  const z = loop ? on.slice(0, len).findIndex(v => !v) : 0;
+  if (z < 0) return [{ s: 0, e: len - 1, all: true }];
+  const runs = [];
+  let s = -1;
+  for (let k = 0; k <= len; k++) {
+    const j = z + k, v = k < len && on[j % len];
+    if (v && s < 0) s = j;
+    if (!v && s >= 0) { runs.push({ s, e: j - 1 }); s = -1; }
+  }
+  return runs;
+}
+
+/** ガウスでならす（ループなら回り込む） */
+function natSmooth(list, sig, loop, N) {
+  const r = Math.ceil(sig * 3), ker = [];
+  for (let k = -r; k <= r; k++) ker.push(Math.exp(-k * k / (2 * sig * sig)));
+  return list.map((_, f) => {
+    const s = new THREE.Vector2();
+    let w = 0;
+    for (let k = -r; k <= r; k++) {
+      let j = f + k;
+      if (loop) j = ((j % N) + N) % N;
+      else if (j < 0 || j > N) continue;
+      s.addScaledVector(list[j], ker[k + r]);
+      w += ker[k + r];
+    }
+    return s.multiplyScalar(1 / w);
+  });
+}
+
+/**
+ * 重心をずらす量 x から、ZMP がずれる量は x − a·x''（a = 高さ ÷ 重力。x'' はフレームの差で）。ZMP を d だけずらす x を解く。
+ * 止まっている所は x = d、速く揺れる所ほど x は小さくて済む。ループは回り込む（離散フーリエ）、そうでなければ両端で傾き 0
+ */
+function natZmpSolve(d, a, loop, N) {
+  const out = d.map(() => new THREE.Vector2());
+  if (N < 2) { out.forEach((v, f) => v.copy(d[f])); return out; }
+  if (loop) {
+    const cos = new Float64Array(N), sin = new Float64Array(N);
+    for (let j = 0; j < N; j++) { cos[j] = Math.cos(2 * Math.PI * j / N); sin[j] = Math.sin(2 * Math.PI * j / N); }
+    for (const comp of ['x', 'y']) {
+      const re = new Float64Array(N), im = new Float64Array(N);
+      for (let k = 0; k < N; k++) for (let j = 0; j < N; j++) { const t = (k * j) % N; re[k] += d[j][comp] * cos[t]; im[k] -= d[j][comp] * sin[t]; }
+      for (let k = 0; k < N; k++) { const s = 1 + a * (2 - 2 * cos[k]); re[k] /= s; im[k] /= s; }
+      for (let j = 0; j < N; j++) {
+        let v = 0;
+        for (let k = 0; k < N; k++) { const t = (k * j) % N; v += re[k] * cos[t] - im[k] * sin[t]; }
+        out[j][comp] = v / N;
+      }
+    }
+    out[N].copy(out[0]);
+    return out;
+  }
+  // 三重対角（Thomas 法）
+  const n = N + 1, cp = new Float64Array(n), dp = d.map(() => new THREE.Vector2());
+  for (let i = 0; i < n; i++) {
+    const diag = (i === 0 || i === n - 1 ? 1 + a : 1 + 2 * a) + (i > 0 ? a * cp[i - 1] : 0);
+    cp[i] = -a / diag;
+    dp[i].copy(d[i]);
+    if (i > 0) dp[i].addScaledVector(dp[i - 1], a);
+    dp[i].multiplyScalar(1 / diag);
+  }
+  out[n - 1].copy(dp[n - 1]);
+  for (let i = n - 2; i >= 0; i--) out[i].copy(dp[i]).addScaledVector(out[i + 1], -cp[i]);
+  return out;
+}
+
+/**
+ * 遅れ: 骨ごとに、ワールドの向きをばねで追わせる。追う先は「親の（遅れた）向き × キーのままのローカル」なので、先の骨ほど遅れが重なる。
+ * ループのときは、1 秒以上回して揺れが落ち着いた周を使う。戻り値はフレームごとの、キーのままのローカルからの差（右から掛ける）
+ */
+function natLagSim(lagBones, chain, baseQ, amt) {
+  const N = D.frameCount, fps = D.fps, loop = D.loop;
+  const at = new Map(chain.map((i, k) => [i, k]));
+  const par = chain.map(i => at.get(M.parent[i]) ?? -1);
+  const topW = chain.map(i => (M.bones[i].parent ? wq(M.bones[i].parent) : new THREE.Quaternion()));
+  const springs = new Map(lagBones.map(([i, hz]) => {
+    const w0 = 2 * Math.PI * hz;
+    return [at.get(i), { k: w0 * w0, c: 2 * NAT_DAMP * w0, Ws: new THREE.Quaternion(), w: new THREE.Vector3(), d: new THREE.Quaternion() }];
+  }));
+  const sub = Math.max(1, Math.ceil(240 / fps)), dt = 1 / (fps * sub);
+  const world = chain.map(() => new THREE.Quaternion()), local = new THREE.Quaternion();
+  const baseAt = (t, k) => {
+    t = loop ? ((t % N) + N) % N : clamp(t, 0, N);
+    const i0 = Math.floor(t), i1 = Math.min(i0 + 1, N);
+    return local.copy(baseQ[i0][k]).slerp(baseQ[i1][k], t - i0);
+  };
+  // 時刻 t（フレーム）まで進める。first: ばねをキーのままの向きに置く
+  const advance = (t, first) => {
+    for (let k = 0; k < chain.length; k++) {
+      const pw = par[k] >= 0 ? world[par[k]] : topW[k];
+      baseAt(t, k);
+      const s = springs.get(k);
+      if (!s) { world[k].copy(pw).multiply(local); continue; }
+      const target = pw.clone().multiply(local);
+      if (first) s.Ws.copy(target);
+      else {
+        const e = natRotVec(target.multiply(s.Ws.clone().invert()));
+        s.w.multiplyScalar(1 - s.c * dt).addScaledVector(e, s.k * dt);
+        s.Ws.premultiply(natQuatOf(s.w.clone().multiplyScalar(dt))).normalize();
+      }
+      // 親から見たローカルの差にして、強さの分だけ効かせる。走りの腕振りのように速いと、ばねがどこまでも遅れるので、骨ごとに 30° でなだらかに頭打ちにする
+      const diff = local.clone().invert().multiply(pw.clone().invert().multiply(s.Ws));
+      const rv = natRotVec(diff).multiplyScalar(amt), a = rv.length();
+      if (a > 1e-9) rv.multiplyScalar(NAT_LAG_CAP * Math.tanh(a / NAT_LAG_CAP) / a);
+      s.d.copy(natQuatOf(rv));
+      world[k].copy(pw).multiply(local).multiply(s.d);
+    }
+  };
+  const out = new Array(N + 1);
+  const rec = f => { out[f] = lagBones.map(([i]) => springs.get(at.get(i)).d.clone()); };
+  const laps = loop ? Math.max(1, Math.ceil(fps / N)) : 0;
+  advance(0, true);
+  if (!loop) rec(0);
+  for (let lap = 0; lap <= laps; lap++) {
+    for (let f = 0; f < N; f++) {
+      if (loop && lap === laps) rec(f);
+      for (let s = 1; s <= sub; s++) advance(f + s / sub, false);
+      if (!loop) rec(f + 1);
+    }
+  }
+  if (loop) out[N] = out[0].map(q => q.clone());
+  return out;
+}
+
+/**
+ * 足: 着いているフレームを決めて、滑った分を打ち消す量（corr。足首を動かす量）と、腰を寄せても足を残す重み（w）を出す。
+ * 着いているのは、足首かつま先が元のポーズの高さから natThr() 以内で、床の上を速く動いていない（床にぴったりなら、振り出しほど速くなければ）。
+ * かかとが浮いていれば、つま先の側を支点にして滑りを測る。床より沈んだ足は、着いていてもいなくても床まで上げる
+ */
+function natFeet(legs, ft, hipsP) {
+  const N = D.frameCount, fps = D.fps, loop = D.loop, thr = natThr(), R = Math.max(1, Math.round(0.12 * fps));
+  const len = loop ? N : N + 1, cyc = j => (loop ? ((j % N) + N) % N : j);
+  const data = legs.map((g, k) => {
+    const d = ft[k], h = d.A.map((A, f) => natHeight(g, A, d.T[f]));
+    // 足首とつま先の高い方（両方とも床にあるか）
+    const hMax = d.A.map((A, f) => (d.T[f] ? Math.max(A.y - M.restWP[g.L.c].y, d.T[f].y - M.restWP[g.toe].y) : A.y - M.restWP[g.L.c].y));
+    // 支点が、前のフレームから床の上で動いた量（足の同じ所を前のフレームの足の向きで見る）
+    const slide = d.A.map(() => new THREE.Vector3());
+    for (let f = 1; f <= N; f++) {
+      const T = d.T[f];
+      const s = T ? clamp((d.A[f].y - M.restWP[g.L.c].y - (T.y - M.restWP[g.toe].y)) / thr, 0, 1) : 0;
+      const off = T ? T.clone().sub(d.A[f]).multiplyScalar(s) : new THREE.Vector3();
+      const before = d.A[f - 1].clone().add(off.clone().applyQuaternion(d.Q[f].clone().invert()).applyQuaternion(d.Q[f - 1]));
+      slide[f].copy(d.A[f]).add(off).sub(before).setY(0);
+    }
+    return { g, h, hMax, slide, on: h.map(v => v < thr), k };
+  });
+  // その場で歩く・走るループ（腰が進まない）は、床がベルトのように流れているとみなし、その速さの分は滑りにしない
+  const belt = new THREE.Vector3();
+  const inPlace = loop && hipsP[N].clone().sub(hipsP[0]).setY(0).length() < 0.05 * M.size;
+  // 床の上を速く動いている足は、まだ着いていない（床すれすれを振っている）とみなす。
+  // 足首もつま先も床にあれば、後ろへはどれだけ速くても（蹴り出しで引きずっている）、前へも振り出しほど速くなければ着いている（滑っている）
+  const vmax = 0.2 * M.size / fps, fwd = modelForward();
+  // フレーム f の前後の、床の上の動き（1 フレームあたり。ベルトは引かない）
+  const motion = (d, f) => {
+    const at = j => {
+      if (loop) j = ((j - 1) % N + N) % N + 1;
+      else if (j < 1 || j > N) return null;
+      return d.slide[j].clone();
+    };
+    const a = at(f), b = at(f + 1);
+    return a == null ? b : b == null ? a : a.add(b).multiplyScalar(0.5);
+  };
+  // 床にべったり着いた足は、前か横へ振り出しほど速く動いていなければ着いている（ベルトの速さには左右されない。止まったままの足も、引きずられる足も着いている）
+  const flatOn = (d, f) => {
+    const m = motion(d, f);
+    if (m == null) return true;
+    const ahead = m.dot(fwd);
+    return ahead < 4 * vmax && m.addScaledVector(fwd, -ahead).length() < 4 * vmax;
+  };
+  const plant = () => {
+    for (const d of data) {
+      d.on = d.h.map((h, f) => {
+        if (!(h < thr)) return false;
+        if (d.hMax[f] < 0.3 * thr) return flatOn(d, f);
+        const m = motion(d, f);
+        return m == null || m.sub(belt).length() < vmax;
+      });
+      if (loop) d.on[N] = d.on[0];
+    }
+  };
+  if (inPlace) {
+    // まず床にぴったり着いているフレームの真ん中の値で決め、着いている区間が決まったら、その間に足が進んだ量の平均にする（歩幅がキーのままになる）
+    const average = (ok, mid) => {
+      const xs = [], zs = [];
+      for (const d of data) for (let f = 1; f <= N; f++) if (ok(d, f) && ok(d, f - 1)) { xs.push(d.slide[f].x); zs.push(d.slide[f].z); }
+      if (xs.length < 4) return null;
+      const m = a => {
+        if (!mid) return a.reduce((s, v) => s + v, 0) / a.length;
+        a.sort((p, q) => p - q);
+        const k = a.length >> 1;
+        return a.length % 2 ? a[k] : (a[k - 1] + a[k]) / 2;
+      };
+      return new THREE.Vector3(m(xs), 0, m(zs));
+    };
+    belt.copy(average((d, f) => d.hMax[f] < 0.3 * thr && flatOn(d, f), true) || average((d, f) => d.h[f] < thr, true) || belt);
+    plant();
+    belt.copy(average((d, f) => d.on[f], false) || belt);
+  }
+  plant();
+  return data.map(({ g, on, slide, h, k }) => {
+    const w = new Float64Array(N + 1), corr = Array.from({ length: N + 1 }, () => new THREE.Vector3());
+    // 腰の高さを決めるときの重み。離れる直前の足は、膝を曲げ始めてよい（着いた足のほうを伸ばす）ので、だんだん軽くする
+    const hw = new Float64Array(N + 1);
+    const runs = natRuns(on, len, loop);
+    const into = j => slide[loop && j === 0 ? N : j];
+    const ends = runs.map(r => {
+      const list = [new THREE.Vector3()];
+      for (let j = r.s + 1; j <= r.e; j++) list.push(list[list.length - 1].clone().sub(into(cyc(j))).add(belt));
+      // 一周ずっと着いているときは、一周でずれた分を均して、つなぎ目で跳ばないようにする
+      if (r.all) {
+        const drift = list[list.length - 1].clone().sub(into(cyc(r.s))).add(belt);
+        list.forEach((v, k) => v.addScaledVector(drift, -k / len));
+      }
+      // 着く所と離れる所に、ずれを半分ずつ（区間の平均に合わせると、キーの足が端でゆっくりになる分だけ、全体が前後にずれる）
+      const mid = list[0].clone().add(list[list.length - 1]).multiplyScalar(0.5);
+      list.forEach((v, k) => {
+        v.sub(mid);
+        corr[cyc(r.s + k)].copy(v);
+        w[cyc(r.s + k)] = 1;
+        hw[cyc(r.s + k)] = r.all ? 1 : Math.min(1, (r.e - r.s - k + 1) / (R + 1));
+      });
+      return { a: list[0], b: list[list.length - 1] };
+    });
+    // 浮いている間: 前後の区間の補正から、なめらかに 0 へ（間が短ければ、前の区間から次の区間へ直接つなぐ）
+    const fill = (from, to, a, b) => {
+      const G = to - from + 1;
+      for (let k = 0; k < G; k++) {
+        const j = cyc(from + k), dl = k + 1, dr = G - k;
+        const el = a && dl <= R ? natEase(1 - dl / (R + 1)) : 0, er = b && dr <= R ? natEase(1 - dr / (R + 1)) : 0;
+        w[j] = Math.max(el, er);
+        hw[j] = er;
+        const v = corr[j].set(0, 0, 0);
+        if (a && b && G < 2 * R) v.copy(a).lerp(b, natEase(dl / (G + 1)));
+        else { if (a) v.addScaledVector(a, el); if (b) v.addScaledVector(b, er); }
+      }
+    };
+    if (runs.length && !runs[0].all) {
+      if (loop) runs.forEach((r, k) => fill(r.e + 1, (k + 1 < runs.length ? runs[k + 1].s : runs[0].s + len) - 1, ends[k].b, ends[(k + 1) % runs.length].a));
+      else {
+        fill(0, runs[0].s - 1, null, ends[0].a);
+        runs.forEach((r, k) => fill(r.e + 1, (k + 1 < runs.length ? runs[k + 1].s : N + 1) - 1, ends[k].b, k + 1 < runs.length ? ends[k + 1].a : null));
+      }
+    }
+    if (loop) { w[N] = w[0]; hw[N] = hw[0]; corr[N].copy(corr[0]); }
+    // 床に沈んだ足（足首かつま先が元のポーズの高さより下）は、床まで上げる
+    for (let f = 0; f <= N; f++) corr[f].y = Math.max(0, -h[f]);
+    if (!D.natural.foot) for (const v of corr) v.set(0, 0, 0);
+    const reach = M.restWP[g.L.a].distanceTo(M.restWP[g.L.b]) + M.restWP[g.L.b].distanceTo(M.restWP[g.L.c]);
+    // キーのままの、脚の付け根から足首までの長さ（腰の高さを決めるのに使う）
+    const ext = ft[k].A.map((A, f) => A.distanceTo(ft[k].U[f]));
+    return { L: g.L, toe: g.toe, on: Uint8Array.from(on), w, hw, corr, reach, ext };
+  });
+}
+
+/**
+ * 今の姿（キーのままのフレーム f の姿）に補正を足す。遅れ → 腰を寄せる・高さを合わせる → 足を IK で戻す の順。
+ * 着いている足（w = 1）は、腰を寄せても動かさない。
+ * 腰を下げる量は c.drop（全フレームでならした物）を使う。戻り値は、このフレームだけで見た下げる量（c.drop を作るのに使う）
+ */
+function natApplyAt(c, f) {
+  const { i0, i1, u } = natAt(c, f);
+  if (c.lag) {
+    c.lagBones.forEach((i, k) => M.bones[i].quaternion.multiply(c.lag[i0][k].clone().slerp(c.lag[i1][k], u)));
+    for (const i of c.lagBones) constrainBone(i);
+    for (const i of c.lagTops) M.bones[i].updateMatrixWorld(true);
+  }
+  if (!c.legs.length) return 0;
+  const move = c.shift[i0].clone().lerp(c.shift[i1], u), h = M.bones[M.hips];
+  if (c.air) move.y += c.air[i0] + (c.air[i1] - c.air[i0]) * u;
+  const base = c.legs.map(l => wp(M.bones[l.L.c])), footQ = c.legs.map(l => wq(M.bones[l.L.c]));
+  const ws = c.legs.map(l => l.w[i0] + (l.w[i1] - l.w[i0]) * u);
+  const goal = c.legs.map((l, k) => base[k].clone().add(l.corr[i0].clone().lerp(l.corr[i1], u)));
+  if (move.lengthSq() > 0) setWorldPos(h, wp(h).add(move));
+  // 腰の高さ: 着いている脚が、キーのままと同じだけ伸びるように上げ下げする（届かなければ下げる）。
+  // 足を床へ上げたり滑りを戻したりすると、伸びきった脚では膝が大きく曲がるため。
+  // しっかり着いている足は全部届くように（低いほうに合わせる）。着きかけ・離れかけの足は、重みの分だけ効かせる
+  let firm = null;
+  const soft = [];
+  c.legs.forEach((l, k) => {
+    const hk = l.hw[i0] + (l.hw[i1] - l.hw[i0]) * u;
+    if (hk <= 0) return;
+    const v = wp(M.bones[l.L.a]).sub(goal[k]), len = Math.min(l.ext[i0] + (l.ext[i1] - l.ext[i0]) * u, l.reach * 0.998);
+    const r2 = len * len - v.x * v.x - v.z * v.z, down = r2 > 0 ? v.y - Math.sqrt(r2) : v.y;
+    if (hk >= 1 - 1e-6) firm = firm == null ? down : Math.max(firm, down);
+    else soft.push([hk, down]);
+  });
+  let need;
+  if (firm != null) { need = firm; for (const [w, d] of soft) need += w * Math.max(0, d - need); }
+  else need = soft.reduce((s, [w, d]) => s + w * d, 0) / Math.max(1, soft.reduce((s, [w]) => s + w, 0));
+  need = clamp(need, -0.1 * M.size, 0.1 * M.size);
+  const drop = c.drop ? c.drop[i0] + (c.drop[i1] - c.drop[i0]) * u : need;
+  if (drop !== 0) { setWorldPos(h, wp(h).setY(wp(h).y - drop)); move.y -= drop; }
+  const keep = [...S.edited];
+  c.legs.forEach((l, k) => {
+    const t = goal[k].addScaledVector(move, 1 - ws[k]);
+    if (t.distanceToSquared(wp(M.bones[l.L.c])) < (M.size * 1e-5) ** 2) return;
+    solveLimb(l.L, t, defaultPole(l.L), footQ[k]);
+  });
+  S.edited.clear();
+  for (const i of keep) S.edited.add(i);
+  return need;
+}
+
+/**
+ * 腰を下げる量（負なら上げる量）を、フレームごとの量からならして決める（フレームごとに決めるとガタつく）。
+ * 下げ足りなくならないよう、前後で一番下げる量に広げてから
+ */
+function natSetDrop(c, raw) {
+  const N = c.n, r = Math.max(1, Math.round(0.05 * D.fps));
+  if (raw.every(v => Math.abs(v) < 1e-7)) { c.drop = raw.map(() => 0); return; }
+  const at = j => raw[c.loop ? ((j % N) + N) % N : clamp(j, 0, N)];
+  const wide = raw.map((_, f) => { let m = -Infinity; for (let k = -r; k <= r; k++) m = Math.max(m, at(f + k)); return new THREE.Vector2(m, 0); });
+  c.drop = natSmooth(wide, r, c.loop, N).map(v => v.x);
+  if (c.loop) c.drop[N] = c.drop[0];
+}
+
+/** 全フレームの補正を計算する（キーのままの姿を毎フレーム測って、遅れ・足・重心の順に決める） */
+function natCompute() {
+  const N = D.frameCount, fps = D.fps, loop = D.loop, nat = D.natural;
+  const c = { n: N, loop, lag: null, lagBones: [], lagTops: [], legs: [], shift: Array.from({ length: N + 1 }, () => new THREE.Vector3()), drop: null, air: null, zmp: null };
+  const legs = nat.foot || nat.com || nat.air ? natLegs() : [];
+  const lagBones = nat.lag && nat.lagAmt > 0 ? natLagBones() : [];
+  // 遅らせる骨と、その親をたどった骨（ワールドの向きを組むのに要る）。浅い順
+  const chainSet = new Set();
+  for (const [i] of lagBones) for (let p = i; p >= 0; p = M.parent[p]) chainSet.add(p);
+  const chain = [...chainSet].sort((a, b) => M.depth[a] - M.depth[b]);
+  const baseQ = [], ft = legs.map(() => ({ A: [], T: [], Q: [], U: [] })), hipsP = [];
+  for (let f = 0; f <= N; f++) {
+    poseAt(f, true);
+    if (chain.length) baseQ.push(chain.map(i => M.bones[i].quaternion.clone()));
+    legs.forEach((g, k) => {
+      ft[k].A.push(wp(M.bones[g.L.c]));
+      ft[k].U.push(wp(M.bones[g.L.a]));
+      ft[k].T.push(g.toe >= 0 ? wp(M.bones[g.toe]) : null);
+      ft[k].Q.push(wq(M.bones[g.L.c]));
+    });
+    hipsP.push(wp(M.bones[M.hips]));
+  }
+  if (lagBones.length) {
+    c.lag = natLagSim(lagBones, chain, baseQ, nat.lagAmt / 100);
+    c.lagBones = lagBones.map(([i]) => i);
+    c.lagTops = c.lagBones.filter(i => !c.lagBones.some(j => isAncestor(j, i)));
+  }
+  if (!legs.length) return c;
+  c.legs = natFeet(legs, ft, hipsP);
+  // 腰を下げる量は、補正した姿で測ってから決める（測るあいだは下げない）
+  c.drop = new Array(N + 1).fill(0);
+  const g = 9.81 * (M.size > 20 ? 100 : 1); // モデルの単位がセンチなら
+  if (!nat.com) {
+    const need = [];
+    for (let f = 0; f <= N; f++) { poseAt(f, true); need.push(natApplyAt(c, f)); }
+    natSetDrop(c, need);
+  } else natComPasses(c, g);
+  // 空中は最後に（ほかの補正を全部入れた姿の重心から決める）
+  if (nat.air) natAir(c, g);
+  return c;
+}
+
+/**
+ * 空中は放物線: 両足とも床に着いていない間、重心の上下を、跳んだフレームと着いたフレームの高さを通る放物線（重力どおり）にする。
+ * 腰ごと上下させるので、体全体が同じだけ動く。跳ぶ前・着いたあとのフレームは変えない。ループでないクリップの、端から始まる・端で終わる空中は変えない
+ */
+function natAir(c, g) {
+  const N = c.n, loop = c.loop, fps = D.fps, len = loop ? N : N + 1;
+  const cyc = j => (loop ? ((j % N) + N) % N : j);
+  c.air = new Float64Array(N + 1);
+  const ys = [];
+  for (let f = 0; f <= N; f++) { poseAt(f, true); natApplyAt(c, f); ys.push(natCom().y); }
+  const off = Array.from({ length: N + 1 }, (_, f) => !c.legs.some(l => l.on[f]));
+  for (const r of natRuns(off, len, loop)) {
+    if (r.all) return;
+    const t0 = r.s - 1, t1 = r.e + 1;
+    if (!loop && (t0 < 0 || t1 > N)) continue;
+    const y0 = ys[cyc(t0)], y1 = ys[cyc(t1)], T = (t1 - t0) / fps;
+    for (let j = r.s; j <= r.e; j++) {
+      const t = (j - t0) / fps;
+      c.air[cyc(j)] = y0 + (y1 - y0) * t / T + 0.5 * g * t * (T - t) - ys[cyc(j)];
+    }
+  }
+  if (loop) c.air[N] = c.air[0];
+}
+
+/** 重心: 補正した姿で ZMP を測り、足の範囲から出た分だけ ZMP を戻すように腰を寄せる。脚の動きなどで合いきらない分は、もう一度測って足す */
+function natComPasses(c, g) {
+  const N = c.n, loop = c.loop, fps = D.fps;
+  const cyc = j => (loop ? ((j % N) + N) % N : clamp(j, 0, N));
+  for (let pass = 0; pass < 3; pass++) {
+    const com = [], hulls = [], need = [];
+    for (let f = 0; f <= N; f++) {
+      poseAt(f, true);
+      need.push(natApplyAt(c, f));
+      com.push(natCom());
+      const pts = [];
+      for (const l of c.legs) if (l.w[f] >= 0.5) pts.push(...natSole(wp(M.bones[l.L.c]), l.toe >= 0 ? wp(M.bones[l.toe]) : null));
+      hulls.push(pts.length ? natHull(pts) : null);
+    }
+    const raw = [];
+    c.zmp = [];
+    for (let f = 0; f <= N; f++) {
+      const a = N < 2 ? new THREE.Vector3() : loop
+        ? com[cyc(f - 1)].clone().add(com[cyc(f + 1)]).addScaledVector(com[cyc(f)], -2).multiplyScalar(fps * fps)
+        : (k => com[k - 1].clone().add(com[k + 1]).addScaledVector(com[k], -2).multiplyScalar(fps * fps))(clamp(f, 1, N - 1));
+      const cm = com[cyc(f)], den = g + a.y, z = new THREE.Vector2(cm.x, cm.z);
+      const ok = den > 0.2 * g;
+      if (ok) z.addScaledVector(new THREE.Vector2(a.x, a.z), -Math.max(0, cm.y) / den);
+      c.zmp.push(z);
+      raw.push(ok && hulls[f]?.length >= 3 ? natIntoHull(hulls[f], z).sub(z) : new THREE.Vector2());
+    }
+    natSetDrop(c, need);
+    if (pass === 2) break;
+    // 腰を動かしても脚の一部は残るので、重心は腰ほどは動かない（8 割ほど）
+    const h = com.reduce((s, v) => s + Math.max(0, v.y), 0) / com.length;
+    const want = natSmooth(raw, Math.max(1, 0.03 * fps), loop, N).map(v => v.multiplyScalar(1 / 0.8));
+    natZmpSolve(want, h * fps * fps / g, loop, N).forEach((v, f) => c.shift[f].add(new THREE.Vector3(v.x, 0, v.y)));
+    if (loop) c.shift[N].copy(c.shift[0]);
+  }
+}
+
+const NAT = { cache: new WeakMap(), building: false };
+/** 今の動きの補正（キーや設定が変わったら計算し直す）。動かしているほう・相手役それぞれに持つ */
+function natData() {
+  const key = [docVer, D.fps, D.frameCount, D.loop, S.limits, JSON.stringify(D.natural)].join('|');
+  const old = NAT.cache.get(D);
+  if (old && old.key === key && old.M === M) return old;
+  const saved = savePose(), edited = [...S.edited];
+  NAT.building = true;
+  let c;
+  try { c = natCompute(); }
+  finally {
+    NAT.building = false;
+    restorePose(saved);
+    S.edited.clear();
+    for (const i of edited) S.edited.add(i);
+  }
+  Object.assign(c, { key, M });
+  NAT.cache.set(D, c);
+  return c;
+}
+
+// 床の印: 緑の輪 = 着いている足、緑の線 = 足の範囲、点 = 重心（範囲の外なら赤）。再生中は補正したあとの物
+const NATV = { group: new THREE.Group(), rings: [], poly: null, dot: null };
+scene.add(NATV.group);
+{
+  const mat = color => new THREE.MeshBasicMaterial(overlayMaterial({ color, opacity: 0.85, side: THREE.DoubleSide }));
+  for (let k = 0; k < 2; k++) NATV.rings.push(new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 28).rotateX(-Math.PI / 2), mat(0x5fbf6a)));
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(32 * 3), 3));
+  NATV.poly = new THREE.LineLoop(pg, new THREE.LineBasicMaterial(overlayMaterial({ color: 0xa8f0b0, opacity: 1 })));
+  NATV.dot = new THREE.Mesh(new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2), mat(0xffffff));
+  for (const o of [...NATV.rings, NATV.poly, NATV.dot]) { o.renderOrder = 998; o.frustumCulled = false; NATV.group.add(o); }
+  NATV.group.visible = false;
+}
+function updateNatMarks() {
+  const n = D.natural, on = natOn() && (n.foot || n.com);
+  NATV.group.visible = on;
+  if (!on) return;
+  const legs = natLegs(), y = 0.002 * M.size, c = S.playing ? natData() : null;
+  const feet = legs.map(g => ({ A: wp(M.bones[g.L.c]), T: g.toe >= 0 ? wp(M.bones[g.toe]) : null }));
+  const t = c ? natAt(c, S.playT) : null;
+  const planted = legs.map((g, k) => {
+    const l = c?.legs[k];
+    return l ? l.w[t.i0] + (l.w[t.i1] - l.w[t.i0]) * t.u >= 0.5 : natHeight(g, feet[k].A, feet[k].T) < natThr();
+  });
+  NATV.rings.forEach((r, k) => {
+    r.visible = !!planted[k];
+    if (!r.visible) return;
+    const p = feet[k].T ? feet[k].A.clone().lerp(feet[k].T, 0.5) : feet[k].A;
+    r.position.set(p.x, y, p.z);
+    r.scale.setScalar(0.03 * M.size);
+  });
+  NATV.poly.visible = NATV.dot.visible = !!n.com;
+  if (n.com) {
+    const pts = [];
+    feet.forEach((f, k) => { if (planted[k]) pts.push(...natSole(f.A, f.T)); });
+    const hull = pts.length ? natHull(pts) : [];
+    const pos = NATV.poly.geometry.attributes.position;
+    hull.forEach((p, k) => pos.setXYZ(k, p.x, y, p.y));
+    pos.needsUpdate = true;
+    NATV.poly.geometry.setDrawRange(0, hull.length);
+    NATV.poly.visible = hull.length >= 3;
+    let z;
+    if (c?.zmp) z = c.zmp[t.i0].clone().lerp(c.zmp[t.i1], t.u);
+    else { const cm = natCom(); z = new THREE.Vector2(cm.x, cm.z); }
+    NATV.dot.position.set(z.x, y * 2, z.y);
+    NATV.dot.scale.setScalar(0.012 * M.size);
+    NATV.dot.material.color.setHex(hull.length < 3 ? 0x8a8f99 : natInside(hull, z) ? 0xffffff : 0xe0605a);
+  }
+  NATV.group.updateMatrixWorld(true);
+}
+
+function refreshNatUI() {
+  const n = D.natural || natDefaults();
+  $('naFoot').checked = n.foot;
+  $('naCom').checked = n.com;
+  $('naAir').checked = !!n.air;
+  $('naLag').checked = n.lag;
+  $('naLagAmt').value = n.lagAmt;
+  $('bNat').classList.toggle('on', natAny());
+}
+function changeNat(fn) {
+  D.natural ??= natDefaults();
+  fn(D.natural);
+  docVer++;
+  markDirty();
+  refreshNatUI();
+}
+$('bNat').onclick = () => {
+  const pop = $('natPop');
+  if (pop.style.display === 'flex') { pop.style.display = 'none'; return; }
+  refreshNatUI();
+  const r = $('bNat').getBoundingClientRect();
+  Object.assign(pop.style, { display: 'flex', left: r.left + 'px', top: r.bottom + 4 + 'px' });
+  // ツールバーの右端にあるので、画面からはみ出さないように
+  pop.style.left = Math.max(4, Math.min(r.left, innerWidth - pop.offsetWidth - 4)) + 'px';
+};
+$('naFoot').onchange = e => changeNat(n => { n.foot = e.target.checked; });
+$('naCom').onchange = e => changeNat(n => { n.com = e.target.checked; });
+$('naAir').onchange = e => changeNat(n => { n.air = e.target.checked; });
+$('naLag').onchange = e => changeNat(n => { n.lag = e.target.checked; });
+$('naLagAmt').onchange = e => changeNat(n => { n.lagAmt = clamp(Number(e.target.value) || 0, 0, 300); });
+document.addEventListener('pointerdown', e => {
+  if (!e.target.closest('#natPop, #bNat')) $('natPop').style.display = 'none';
 });
 
 // ---------- 動画（3D の横に並べて、タイムラインと一緒に動かす） ----------
@@ -5964,7 +6658,8 @@ refreshBreathUI();
 refreshVideoUI();
 
 // 確認用（コンソールから触る）
-window.MTP = { V, applyLimits, limitOf, poseAt, applyBreath, breathWave, breathCycle, openVideo, LOOK, solveLook, syncLook, mirrorBoneEdit, mirrorLimbEdit, eyePos, headForward, handRig, jointAngles, setJointAngles, HP, HEADIK, HIPSIK, select, gizmo, model: () => M };
+window.MTP = { V, applyLimits, limitOf, poseAt, applyBreath, breathWave, breathCycle, openVideo, LOOK, solveLook, syncLook, mirrorBoneEdit, mirrorLimbEdit, eyePos, headForward, handRig, jointAngles, setJointAngles, HP, HEADIK, HIPSIK, select, gizmo, model: () => M,
+  NAT, natData, natCom, natLegs, natHeight, natHull, natInside };
 
 // ================================================================
 //  ループ
@@ -5980,6 +6675,9 @@ function tick(now) {
       if (D.loop) S.playT %= D.frameCount;
       else { S.playT = D.frameCount; stopPlay(); }
     }
+  }
+  // 最後まで再生して止まったときは、止めたときの姿（呼吸や補正の入らない、編集用の姿）のままにする
+  if (S.playing && M) {
     poseAt(S.playT, true);
     syncLimbs();
     videoSync();
@@ -5989,6 +6687,7 @@ function tick(now) {
   updatePair();
   scene.updateMatrixWorld();
   if (M) updateMarkers();
+  if (M) updateNatMarks();
   syncHandPad();
   const view = M && S.unityView ? applyUnityView() : null;
   renderer.render(scene, camera);
