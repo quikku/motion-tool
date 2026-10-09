@@ -435,9 +435,17 @@ async function parseModelFiles(files, texByMat = null, body = null) {
  * Unity とは X を反転した向きで、位置の単位は FBX のローカルの位置の長さの比で直す
  */
 function applyBodyBones(group, body) {
-  if (!body?.bones?.length) return null;
   const byName = new Map();
   group.traverse(o => { const n = o.userData.originalName || o.name; if (o.isBone && !byName.has(n)) byName.set(n, o); });
+  // 動きの付いたまま書き出した FBX は、ファイルの骨の回転と Unity が読んだ回転が違うことがある。Unity の方に合わせる
+  // （ふつうの FBX でも 0.02° ほどの丸めの差はあるので、それは触らない）
+  for (const r of body?.fbxRest || []) {
+    const o = byName.get(r.name);
+    if (!o || r.rot?.length !== 4) continue;
+    const q = mirrorQ(new THREE.Quaternion(...r.rot));
+    if (o.quaternion.angleTo(q) > 0.1 * Math.PI / 180) o.quaternion.copy(q);
+  }
+  if (!body?.bones?.length) return null;
   // 変える前の、FBX のままの位置と向き（ワールド）
   group.updateMatrixWorld(true);
   const before = new Map([...byName].map(([n, o]) => [n, { p: wp(o), q: wq(o) }]));
