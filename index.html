@@ -72,6 +72,8 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 #tl { display: block; width: 100%; height: 100%; }
 #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim);
   font-size: 14px; pointer-events: none; text-align: center; line-height: 1.8; }
+/* 最初の読み込みが終わるまで、3D 表示を隠して触れなくする */
+#empty.busy { background: var(--bg); pointer-events: auto; z-index: 5; }
 .menu { position: fixed; background: var(--panel2); border: 1px solid #50545c; border-radius: 4px; padding: 3px 0; z-index: 60;
   min-width: 140px; box-shadow: 0 4px 14px rgba(0,0,0,.4); display: none; }
 .menu div { padding: 4px 12px; cursor: pointer; white-space: nowrap; }
@@ -180,7 +182,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <div id="meshes" style="display:none"></div>
   </div>
   <div id="view">
-    <div id="empty"><div>読み込み中</div></div>
+    <div id="empty" class="busy"><div>読み込み中</div></div>
     <div id="handPad"><div class="hbar"><button id="hpL">左手</button><button id="hpR">右手</button><span id="hpInfo"></span></div><svg id="hpSvg" viewBox="0 0 214 214"></svg></div>
   </div>
   <div id="vpane" style="display:none">
@@ -802,7 +804,7 @@ function setModel(group, name, info = null, into = null) {
   buildBoneList();
   buildShapeList();
   buildMeshList();
-  $('empty').style.display = 'none';
+  if (!S.booting) $('empty').style.display = 'none';
   S.sel = null;
   goFrame(S.frame);
   setStatus(`${name}  骨${bones.length}本、` + (generic ? genericNote()
@@ -6837,7 +6839,8 @@ function tick(now) {
   if (M) updateNatMarks();
   syncHandPad();
   const view = M && S.unityView ? applyUnityView() : null;
-  renderer.render(scene, camera);
+  // 最初の読み込みの間は描かない（シェーダーとテクスチャの準備は warmUp でまとめてする）
+  if (!S.booting) renderer.render(scene, camera);
   restoreUnityView(view);
   requestAnimationFrame(tick);
 }
@@ -6922,6 +6925,14 @@ async function openFromUnity(man) {
 
 async function loadDefaultModel() {
   const say = text => { $('empty').firstElementChild.textContent = text; setStatus(text, true); };
+  // 読み込み・衣装・シェーダーの準備が全部終わるまで、3D 表示を隠しておく（途中で触ると、最初の描画で 1 秒ほど止まるため）
+  S.booting = true;
+  try { await loadAll(say); } finally {
+    S.booting = false;
+    if (M) { $('empty').style.display = 'none'; $('empty').classList.remove('busy'); }
+  }
+}
+async function loadAll(say) {
   if (!/^https?:$/.test(location.protocol)) { say('公開ページか、Unity の Tools/SisMotionTooL から開いてください'); return; }
   const unity = new URLSearchParams(location.search).has('unity') ? await filesFromUnity() : null;
   S.avatarId = unity?.man.avatar || null;
@@ -6938,8 +6949,18 @@ async function loadDefaultModel() {
   if (unity) await openFromUnity(unity.man);
   // Unity を通さないページは、茜犬の見本（モデルの数値が入っているので、ブラウザだけで .anim を書ける）
   else if (M?.muscleInfo) { S.sample = true; }
+  if (M) await warmUp();
   S.dirty = false;
   updateTitle();
+}
+
+/** 最初の描画で止まらないように、シェーダーを裏で組み、テクスチャを GPU に送っておく */
+async function warmUp() {
+  scene.updateMatrixWorld();
+  try { await renderer.compileAsync(scene, camera); } catch (e) { /* 組めなければ、描くときに組む */ }
+  const texs = new Set();
+  scene.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) for (const k in m) if (m[k]?.isTexture) texs.add(m[k]); });
+  for (const t of texs) { renderer.initTexture(t); await new Promise(r => setTimeout(r)); }
 }
 loadDefaultModel();
 
