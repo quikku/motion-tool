@@ -115,6 +115,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
   padding: 6px 8px; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.4); white-space: nowrap; }
 #ikRows .prow { padding: 1px 0; }
 #ikRows .nm { width: 36px; }
+#ikRows.animal .nm { width: 60px; }
 #handPad { position: absolute; right: 8px; top: 8px; width: 190px; background: rgba(37,39,43,.92); border: 1px solid var(--line);
   border-radius: 6px; display: none; z-index: 4; touch-action: none; }
 #handPad .hbar { display: flex; gap: 3px; align-items: center; padding: 3px 4px 0; cursor: move; touch-action: none; }
@@ -804,8 +805,15 @@ function setModel(group, name, info = null, into = null) {
   $('empty').style.display = 'none';
   S.sel = null;
   goFrame(S.frame);
-  setStatus(`${name}  骨${bones.length}本、` + (generic ? '人型でないモデル（骨を回して作る。IK・手パッド・呼吸・上限は使えない）'
+  setStatus(`${name}  骨${bones.length}本、` + (generic ? genericNote()
     : `人型${M.humanSet.size}本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は${axesFrom}` : '')));
+}
+
+/** 人型でないモデルの説明（状態の欄） */
+function genericNote() {
+  if (!EXPERIMENTAL) return '人型でないモデル（骨を回して作る。IK・手パッド・呼吸・上限は使えない）';
+  const ik = [...M.limbs.map(L => L.label), ...(hasHeadIK() ? ['頭'] : [])];
+  return `人型でないモデル（IKは試験的: ${ik.length ? ik.join('・') : '脚と頭が見つからない'}。手パッド・呼吸・上限は使えない）`;
 }
 
 const ROOT_NAME = 'ルート';
@@ -975,6 +983,13 @@ function buildLimbs() {
   for (const L of M.limbs || []) { scene.remove(L.target); scene.remove(L.pole); }
   M.limbs = [];
   M.partner = null;
+  M.headChain = null;
+  M.animalHead = null;
+  if (M.generic) {
+    if (EXPERIMENTAL) buildAnimalLimbs();
+    else M.headChain = [];
+    return;
+  }
   const fwd = modelForward();
   for (const def of LIMBS) {
     const c = M.human[def.parts[2]];
@@ -994,6 +1009,100 @@ function buildLimbs() {
     scene.add(target, pole);
     M.limbs.push({ ...def, a, b, c, hingeInA, target, pole });
   }
+}
+
+const ANIMAL_LEG = { LeftHand: '左前足', RightHand: '右前足', LeftFoot: '左後ろ足', RightFoot: '右後ろ足' };
+/** 頭の IK で動かす頭の骨（人型でないモデルは、見分けた頭） */
+const headIkBone = () => M.human.Head ?? M.animalHead ?? null;
+
+/**
+ * 人型でないモデル（試験的機能）: 四つ足の脚と頭を、骨の形から見分けて IK を付ける。
+ * 脚 = 肌に効いている骨のうち、床の近くまで届く枝分かれの無い並び。前の 2 本を前足、後ろの 2 本を後ろ足にする。
+ * 4 本の並び（付け根・すね・足・足先）は m（足）のワールドの向きを保ったまま、付け根とすねで届かせる。的は足先（c）。
+ * 頭 = 名前に head が付く骨。後ろ足の付け根より頭の側の背骨と首で曲げる
+ */
+function buildAnimalLimbs() {
+  const n = M.bones.length;
+  const weighted = new Set();
+  for (const m of M.meshes) {
+    const si = m.isSkinnedMesh ? m.geometry.attributes.skinIndex : null, sw = si ? m.geometry.attributes.skinWeight : null;
+    if (!si || !sw) continue;
+    const used = new Set();
+    for (let k = 0; k < si.count * 4; k++) if (sw.array[k] > 0.01) used.add(si.array[k]);
+    for (const j of used) { const i = M.index.get(m.skeleton.bones[j]); if (i != null) weighted.add(i); }
+  }
+  if (!weighted.size) for (let i = 0; i < n; i++) if (i !== M.rootBone) weighted.add(i);
+  // 下に肌に効く骨があるか（深い骨から）
+  const hasW = M.bones.map((_, i) => weighted.has(i));
+  [...M.bones.keys()].sort((x, y) => M.depth[y] - M.depth[x]).forEach(i => { if (hasW[i] && M.parent[i] >= 0) hasW[M.parent[i]] = true; });
+  const branches = i => M.children[i].filter(k => hasW[k]).length;
+  const leaf = i => weighted.has(i) && branches(i) === 0;
+  const ys = [...weighted].map(i => M.restWP[i].y);
+  const minY = Math.min(...ys), height = Math.max(...ys) - minY;
+  if (!(height > 0)) { M.headChain = []; return; }
+  const near = i => M.restWP[i].y - minY < height * 0.2;
+  const leavesNear = i => { const st = [i]; while (st.length) { const j = st.pop(); if (leaf(j) && !near(j)) return false; st.push(...M.children[j].filter(k => hasW[k])); } return true; };
+  // 先端から、枝分かれする骨の手前までさかのぼる
+  const chainTo = tip => {
+    const c = [tip];
+    for (let i = M.parent[tip]; i >= 0 && i !== M.rootBone && branches(i) === 1; i = M.parent[i]) c.unshift(i);
+    return c;
+  };
+  const legs = [], seen = new Set();
+  for (let tip = 0; tip < n; tip++) {
+    if (!leaf(tip) || !near(tip)) continue;
+    let c = chainTo(tip);
+    // 指が枝分かれしているときは、その付け根を先端にする
+    while (c.length < 3 && M.parent[c[0]] >= 0 && M.parent[c[0]] !== M.rootBone && leavesNear(M.parent[c[0]])) c = chainTo(M.parent[c[0]]);
+    if (c.length < 3) continue;
+    c = c.slice(-4);
+    let len = 0;
+    for (let k = 1; k < c.length; k++) len += M.restWP[c[k]].distanceTo(M.restWP[c[k - 1]]);
+    if (seen.has(c[0]) || len < height * 0.15) continue;
+    seen.add(c[0]);
+    legs.push(c);
+  }
+  const notHead = /look|_end$|target|ctrl|ctl|pole|(^|[^a-z])ik([^a-z]|$)/i;
+  const head = [...weighted].filter(i => /head/i.test(M.names[i]) && !notHead.test(M.names[i])).sort((x, y) => M.depth[x] - M.depth[y])[0] ?? null;
+
+  const center = new THREE.Vector3();
+  for (const c of legs) center.add(M.restWP[c[0]]);
+  if (legs.length) center.multiplyScalar(1 / legs.length);
+  const fwd = head != null && legs.length ? M.restWP[head].clone().sub(center) : new THREE.Vector3(0, 0, 1);
+  fwd.y = 0;
+  if (fwd.lengthSq() < 1e-12) fwd.set(0, 0, 1);
+  fwd.normalize();
+  const right = fwd.clone().cross(new THREE.Vector3(0, 1, 0));
+  const ahead = c => M.restWP[c[0]].clone().sub(center).dot(fwd);
+  legs.sort((x, y) => ahead(y) - ahead(x));
+  const nFront = legs.length >= 4 ? Math.floor(legs.length / 2) : 0;
+  legs.forEach((c, k) => {
+    const arm = k < nFront;
+    const side = sideOf(M.names[c[0]]) || sideOf(M.names[c[c.length - 1]]) || (M.restWP[c[0]].clone().sub(center).dot(right) > 0 ? 'Right' : 'Left');
+    const key = side + (arm ? 'Hand' : 'Foot');
+    if (M.limbs.some(L => L.key === key)) return;
+    const a = c[0], b = c[1], m = c.length === 4 ? c[2] : null, tip = c[c.length - 1];
+    // 曲げの軸は元のポーズの曲がり方から。まっすぐなら人型と同じ向き（前足は先が前、後ろ足は後ろへ曲がる）
+    const u = M.restWP[b].clone().sub(M.restWP[a]), v = M.restWP[m ?? tip].clone().sub(M.restWP[b]);
+    let h = u.clone().cross(v);
+    if (h.lengthSq() < (Math.sin(3 * Math.PI / 180) * u.length() * v.length()) ** 2) h = v.clone().normalize().cross(arm ? fwd : fwd.clone().negate());
+    const hingeInA = h.normalize().applyQuaternion(M.restWQ[a].clone().invert());
+    const target = new THREE.Object3D(), pole = new THREE.Object3D();
+    scene.add(target, pole);
+    M.limbs.push({ key, label: ANIMAL_LEG[key], parts: [], arm, a, b, c: tip, m, hingeInA, target, pole, animal: true });
+  });
+
+  M.animalHead = head;
+  const chain = [];
+  if (head != null) {
+    const hind = M.limbs.filter(L => !L.arm);
+    const roots = (hind.length ? hind : M.limbs).map(L => L.a);
+    for (let i = M.parent[head]; i >= 0 && i !== M.rootBone && i !== M.hips; i = M.parent[i]) {
+      if (roots.some(r => isAncestor(i, r))) break;
+      chain.unshift(i);
+    }
+  }
+  M.headChain = chain.slice(-4);
 }
 
 const limbHinge = L => L.hingeInA.clone().applyQuaternion(wq(M.bones[L.a])).normalize();
@@ -1047,7 +1156,7 @@ function headChain() {
 const hasHeadIK = () => !!M && headChain().length > 0;
 function syncHeadIK(force = false) {
   if (!hasHeadIK() || (!force && S.sel?.kind === 'head' && gizmo.dragging)) return;
-  const h = M.bones[M.human.Head];
+  const h = M.bones[headIkBone()];
   HEADIK.target.position.copy(wp(h));
   HEADIK.target.quaternion.copy(wq(h));
   HEADIK.target.updateMatrixWorld(true);
@@ -1058,7 +1167,7 @@ function syncHeadIK(force = false) {
  * 背骨と首は上限に収める。頭のワールドの向きは的の向きにする（手先の IK と同じ）
  */
 function solveHeadIK() {
-  const chain = headChain(), head = M.bones[M.human.Head];
+  const chain = headChain(), hi = headIkBone(), head = M.bones[hi];
   const t = HEADIK.target.position, endQ = HEADIK.target.quaternion.clone(), id = new THREE.Quaternion();
   for (let it = 0; it < 8; it++) {
     chain.forEach((j, k) => {
@@ -1072,9 +1181,9 @@ function solveHeadIK() {
     if (wp(head).distanceToSquared(t) < (M.size * 1e-4) ** 2) break;
   }
   setWorldQuat(head, endQ);
-  constrainBone(M.human.Head);
+  constrainBone(hi);
   for (const j of chain) S.edited.add(j);
-  S.edited.add(M.human.Head);
+  S.edited.add(hi);
 }
 
 // ---------- 腰の IK ----------
@@ -1149,7 +1258,7 @@ function followPins(changed, except = null) {
 }
 
 function defaultPole(L) {
-  const a = wp(M.bones[L.a]), b = wp(M.bones[L.b]), c = wp(M.bones[L.c]);
+  const a = wp(M.bones[L.a]), b = wp(M.bones[L.b]), c = wp(M.bones[L.m ?? L.c]);
   const len = a.distanceTo(b) + b.distanceTo(c);
   const ac = c.clone().sub(a);
   const mid = a.clone().add(ac.clone().multiplyScalar(b.clone().sub(a).dot(ac) / Math.max(1e-12, ac.lengthSq())));
@@ -1162,6 +1271,15 @@ function rotateWorld(o, q) { setWorldQuat(o, q.clone().multiply(wq(o))); }
 
 /** t・p・endQ: 先端の行き先・ポール・先端の向き（省くと IK の的の物） */
 function solveLimb(L, t = L.target.position.clone(), p = L.pole.position.clone(), endQ = L.target.quaternion.clone()) {
+  // 足（m）のある脚: 足のワールドの向きを保ったまま、足の付け根を届かせる。足先は的の向きにする
+  if (L.m != null) {
+    const off = wp(M.bones[L.c]).sub(wp(M.bones[L.m]));
+    solveLimb({ ...L, c: L.m, m: null }, t.clone().sub(off), p, wq(M.bones[L.m]));
+    setWorldQuat(M.bones[L.c], endQ);
+    constrainBone(L.c);
+    S.edited.add(L.c);
+    return;
+  }
   const A = M.bones[L.a], B = M.bones[L.b], C = M.bones[L.c];
   const a = wp(A), b = wp(B), c = wp(C);
   const l1 = a.distanceTo(b), l2 = b.distanceTo(c);
@@ -1230,7 +1348,7 @@ function buildDof() {
     M.dofWorld.set(i, { kind, axis: axisW.clone().normalize(), hinge: hingeW ? hingeW.clone().normalize() : null });
   };
   // 肘・膝: 曲げ（ヒンジ）と骨の軸まわりのねじり
-  for (const L of M.limbs) set(L.b, 'hingeTwist', dirTo(L.b, L.c), limbHingeRest(L));
+  for (const L of M.limbs) if (!L.animal) set(L.b, 'hingeTwist', dirTo(L.b, L.c), limbHingeRest(L));
   // Unity が測った軸があれば、それで決める（指などは骨の形からの推測が数度ずれる）
   if (M.unityAxes?.size) {
     for (const s of ['Left', 'Right']) {
@@ -1593,7 +1711,7 @@ function constrainDof(i) {
 }
 
 function isAncestor(i, j) { for (let p = M.parent[j]; p >= 0; p = M.parent[p]) if (p === i) return true; return false; }
-function limbOfBone(i) { return M.limbs.find(L => L.a === i || L.b === i || L.c === i); }
+function limbOfBone(i) { return M.limbs.find(L => L.a === i || L.b === i || L.c === i || L.m === i); }
 
 // ================================================================
 //  キーと補間
@@ -2015,7 +2133,8 @@ function attachGizmo() {
 function selectedBone() {
   if (!S.sel || !M) return -1;
   if (S.sel.kind === 'bone') return S.sel.i;
-  if (S.sel.kind === 'look' || S.sel.kind === 'head') return M.human.Head ?? -1;
+  if (S.sel.kind === 'look') return M.human.Head ?? -1;
+  if (S.sel.kind === 'head') return headIkBone() ?? -1;
   if (S.sel.kind === 'hips') return M.hips;
   return M.limbs[S.sel.limb]?.c ?? -1;
 }
@@ -2040,7 +2159,7 @@ gizmo.addEventListener('objectChange', () => {
     followPins([M.human.Neck, M.human.Head].filter(b => b != null), 'Look');
   } else if (S.sel.kind === 'head') {
     solveHeadIK();
-    followPins([...headChain(), M.human.Head], 'Head');
+    followPins([...headChain(), headIkBone()], 'Head');
   } else if (S.sel.kind === 'hips') {
     solveHipsIK();
     followPins([M.hips], 'Hips');
@@ -2115,7 +2234,7 @@ function buildMarkers() {
 function boneShown(i) {
   if (S.boneView === 'none' || i === M.rootBone) return false;
   if (M.limbs.some(L => L.c === i && ikShown(L.key))) return false;
-  if (i === M.human.Head && ikShown('Head') && hasHeadIK()) return false;
+  if (i === headIkBone() && ikShown('Head') && hasHeadIK()) return false;
   if (i === M.hips && ikShown('Hips') && hasHipsIK()) return false;
   return S.boneView === 'all' || M.humanSet.has(i);
 }
@@ -2327,7 +2446,7 @@ function pick(x, y) {
     const i = boneAtHit(h);
     if (i < 0) continue;
     const L = M.limbs.findIndex(l => l.c === i && ikShown(l.key));
-    if (L < 0 && i === M.human.Head && ikShown('Head') && hasHeadIK()) { select({ kind: 'head' }); return; }
+    if (L < 0 && i === headIkBone() && ikShown('Head') && hasHeadIK()) { select({ kind: 'head' }); return; }
     if (L < 0 && i === M.hips && ikShown('Hips') && hasHipsIK()) { select({ kind: 'hips' }); return; }
     select(L >= 0 ? { kind: 'ik', limb: L } : { kind: 'bone', i });
     return;
@@ -2512,9 +2631,9 @@ function keySelected() {
   if (S.tab === 'shapes' && S.shapeSel && !shapes.includes(S.shapeSel)) shapes.push(S.shapeSel);
   const i = selectedBone();
   let bones = [...S.edited];
-  if (S.sel?.kind === 'ik' || S.sel?.kind === 'pole') { const L = M.limbs[S.sel.limb]; bones.push(L.a, L.b, L.c); }
+  if (S.sel?.kind === 'ik' || S.sel?.kind === 'pole') { const L = M.limbs[S.sel.limb]; bones.push(L.a, L.b, L.c, ...(L.m != null ? [L.m] : [])); }
   else if (S.sel?.kind === 'look') bones.push(...[M.human.Neck, M.human.Head].filter(b => b != null));
-  else if (S.sel?.kind === 'head') bones.push(...headChain(), M.human.Head);
+  else if (S.sel?.kind === 'head') bones.push(...headChain(), headIkBone());
   else if (S.sel?.kind === 'hips') bones.push(M.hips, ...spineChain(), ...M.limbs.filter(L => !L.arm).flatMap(L => [L.a, L.b, L.c]));
   else if (i >= 0 && S.tab === 'bones') bones.push(i);
   bones = [...new Set(bones)];
@@ -3372,10 +3491,13 @@ function updateButtons() {
   $('bSpace').textContent = S.space === 'local' ? 'ローカル' : 'ワールド';
   // 人型でないモデルでは、人型の骨を使う物は効かない
   const generic = !!M?.generic;
-  for (const id of ['bIK', 'bIKList', 'bHand', 'bLimit', 'bBreath']) $(id).disabled = generic;
+  // 人型でないモデルの IK は試験的機能（脚と頭を見分けられたときだけ）
+  const noIk = generic && !M.limbs.length && !hasHeadIK();
+  for (const id of ['bHand', 'bLimit', 'bBreath']) $(id).disabled = generic;
+  for (const id of ['bIK', 'bIKList']) $(id).disabled = noIk;
   $('bIK').classList.toggle('on', S.ik);
   $('bPin').classList.toggle('on', S.pinOn);
-  $('bPin').disabled = !S.ik || generic;
+  $('bPin').disabled = !S.ik || noIk;
   $('bAuto').classList.toggle('on', S.autoKey);
   $('bSym').classList.toggle('on', !!S.sym);
   $('bLimit').classList.toggle('on', S.limits !== false);
@@ -4854,7 +4976,7 @@ $('bIK').onclick = () => {
 function leaveHiddenIk() {
   const k = ikKeyOfSel();
   if (!k || ikShown(k)) return;
-  select({ kind: 'bone', i: S.sel.kind === 'look' || S.sel.kind === 'head' ? M.human.Head : S.sel.kind === 'hips' ? M.hips : M.limbs[S.sel.limb].c });
+  select({ kind: 'bone', i: S.sel.kind === 'look' ? M.human.Head : S.sel.kind === 'head' ? headIkBone() : S.sel.kind === 'hips' ? M.hips : M.limbs[S.sel.limb].c });
 }
 /** このモデルにある IK の種類か */
 function ikExists(k) {
@@ -4877,13 +4999,14 @@ function refreshIkPop() {
   const rows = $('ikRows');
   if (!rows || $('ikPop').style.display !== 'flex') return;
   rows.innerHTML = '';
+  rows.classList.toggle('animal', !!M?.generic);
   for (const [k, label] of IK_KINDS) {
     if (!ikExists(k)) continue;
     const row = document.createElement('div');
     row.className = 'prow';
     const nm = document.createElement('span');
     nm.className = 'nm';
-    nm.textContent = label;
+    nm.textContent = (M?.generic && ANIMAL_LEG[k]) || label;
     row.appendChild(nm);
     for (const [what, text] of [['show', '出す'], ['pin', '固定']]) {
       const lb = document.createElement('label'), cb = document.createElement('input');
@@ -5244,6 +5367,14 @@ function setExperimental(on) {
     P.pending = pd;
     contact = null;
   } else if (on && P.pending) restorePair(P.pending);
+  // 人型でないモデルの脚と頭の IK を付け直す
+  if (M?.generic) {
+    if (ikKeyOfSel()) select(null);
+    buildLimbs();
+    syncLimbs();
+    updateButtons();
+    setStatus(`${M.name}  骨${M.bones.length}本、` + genericNote());
+  }
   applyExperimental();
 }
 applyExperimental();
@@ -5266,7 +5397,7 @@ function renderHelp() {
   add('コピー', 'キーを選んでいればキー、いなければポーズ');
   $('helpNote').textContent = (S.sample ? '「.anim保存」で、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '「.anim保存」で、Unityのプロジェクトに.animができる') +
     '。「プロジェクト保存」で.sismotionに残せる' +
-    (M?.generic ? '。人型でないモデルは、骨を回して作る（IK・手パッド・呼吸・上限は使えない。位置を動かせるのは、ルートと、ルートのすぐ下の骨）' : '') +
+    (M?.generic ? '。人型でないモデルは、骨を回して作る（' + (EXPERIMENTAL ? '脚と頭のIKは試験的。' : 'IK・') + '手パッド・呼吸・上限は使えない。位置を動かせるのは、ルートと、ルートのすぐ下の骨）' : '') +
     (!EXPERIMENTAL ? '' : '。「相手」で2人目のアバターを出して一緒に再生できる。Qで動かすほうが入れ替わる。相手役は最初ロックされていて、クリックで触れない（「相手」のロックを外すと、相手の体のクリックで入れ替わり、「くっつける」が使える）。「補正」は足のすべり・重心・空中・遅れを直す（再生と保存のときだけ）');
 }
 
