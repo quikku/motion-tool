@@ -2558,9 +2558,14 @@ function deleteKeys() {
   goFrame(S.frame);
 }
 
+/** 選んだキーを delta だけ動かせる量（いちばん早いキーが 0 より前に出ないように。出ると 0 で重なって消える） */
+const clampKeyDelta = (list, delta) => Math.max(delta, -Math.min(...list.map(([, f]) => f)));
+
 function moveKeys(delta) {
   const list = expandSel();
-  if (!list.length || !delta) return;
+  if (!list.length) return;
+  delta = clampKeyDelta(list, delta);
+  if (!delta) return;
   pushUndo();
   const moving = new Map();
   for (const [ref, f] of list) {
@@ -2578,20 +2583,23 @@ function moveKeys(delta) {
   for (const [ref, ks] of moving) {
     const t = trackOfRef(ref);
     for (const k of ks) {
-      k.f = Math.max(0, k.f + delta);
+      k.f += delta;
       t.keys = t.keys.filter(x => x.f !== k.f);
       t.keys.push(k);
     }
     t.keys.sort((a, b) => a.f - b.f);
   }
-  for (const [f, m] of interpMoved) D.interp.set(Math.max(0, f + delta), m);
+  for (const [f, m] of interpMoved) D.interp.set(f + delta, m);
+  // キーが無くなったフレームのつなぎ方は残さない（deleteKeys と同じ）
+  const left = new Set(allKeyFrames());
+  for (const f of [...D.interp.keys()]) if (!left.has(f)) D.interp.delete(f);
   TL.sel = new Set([...TL.sel].map(id => {
     const at = id.lastIndexOf(':');
-    return `${id.slice(0, at)}:${Math.max(0, Number(id.slice(at + 1)) + delta)}`;
+    return `${id.slice(0, at)}:${Number(id.slice(at + 1)) + delta}`;
   }));
   docVer++;
   markDirty();
-  if (frames.has(S.frame)) S.frame = Math.max(0, S.frame + delta);
+  if (frames.has(S.frame)) S.frame += delta;
   goFrame(S.frame);
 }
 
@@ -2849,7 +2857,7 @@ TL.el.addEventListener('pointerdown', e => {
   TL.el.setPointerCapture(e.pointerId);
   // 目盛り: 終わりの印は長さ、それ以外はフレーム移動
   if (y < TL.rulerH) {
-    if (tlOnEnd(x, y)) { pushUndo(); TL.drag = { type: 'end', from: D.frameCount }; }
+    if (tlOnEnd(x, y)) TL.drag = { type: 'end', from: D.frameCount };
     else { TL.drag = { type: 'scrub' }; if (S.playing) stopPlay(); goFrame(xf(x)); }
     drawTimeline();
     return;
@@ -2883,9 +2891,10 @@ TL.el.addEventListener('pointermove', e => {
   if (d.type === 'scrub') { const f = clamp(Math.round(xf(x)), 0, D.frameCount); if (f !== S.frame) goFrame(f); }
   else if (d.type === 'end') {
     const n = Math.max(1, Math.round(xf(x - END_W / 2)));
-    if (n !== D.frameCount) { D.frameCount = n; docVer++; TL.fit = false; $('frames').value = n; goFrame(Math.min(S.frame, n)); }
+    // 取り消しは、長さが変わったときだけ積む（つまんだだけで、やり直しの履歴を消さないように）
+    if (n !== D.frameCount) { if (!d.pushed) { pushUndo(); d.pushed = true; } D.frameCount = n; docVer++; TL.fit = false; $('frames').value = n; goFrame(Math.min(S.frame, n)); }
   }
-  else if (d.type === 'key') { d.delta = Math.round((x - d.x0) / TL.ppf); drawTimeline(); }
+  else if (d.type === 'key') { d.delta = clampKeyDelta(expandSel(), Math.round((x - d.x0) / TL.ppf)); drawTimeline(); }
   else if (d.type === 'pan') { TL.fit = false; TL.start = d.s0 - (x - d.x0) / TL.ppf; TL.scrollY = d.sy0 - (y - d.y0); drawTimeline(); }
   else if (d.type === 'box') {
     d.x1 = x; d.y1 = y;
@@ -2912,10 +2921,7 @@ function tlEndDrag(cancel) {
       if (d.single) { TL.sel.clear(); TL.sel.add(d.hit.id); }
       if (!d.add) goFrame(d.hit.f);
     }
-  } else if (d.type === 'end') {
-    if (D.frameCount === d.from) undoStack.pop();
-    else { markDirty(); refreshAll(); }
-  }
+  } else if (d.type === 'end' && d.pushed) { markDirty(); refreshAll(); }
   drawTimeline();
 }
 TL.el.addEventListener('pointerup', () => tlEndDrag(false));
@@ -5272,7 +5278,8 @@ window.addEventListener('keydown', e => {
     renderSettings();
     return;
   }
-  const typing = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
+  // 文字を打つ欄だけ。つまみ・チェック・選ぶ欄に触ったあとも、キーの割り当ては効く
+  const typing = e.target.tagName === 'INPUT' && !['range', 'checkbox', 'button', 'file'].includes(e.target.type);
   const modal = ['help', 'settings', 'ask'].find(id => $(id).classList.contains('show'));
   if (e.code === 'Escape') {
     hideMenu();
