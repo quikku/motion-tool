@@ -4346,7 +4346,9 @@ async function loadPair(src) {
   P.show = true;
   updateButtons();
   refreshGhost();
-  facePair();
+  // 最初は原点・0°に置く（向かい合わせはボタンで）
+  setOtherPlace({ x: 0, y: 0, z: 0, yaw: 0 });
+  pairChanged();
   setStatus(`相手役: ${r.name}` + (r.missing.length ? `  テクスチャなし: ${r.missing.join(', ')}` : ''));
   // 開いたプロジェクトの相手役が、このモデルを待っていたら戻す
   if (P.pending && P.pending.model === r.name) applyPairData(P.pending);
