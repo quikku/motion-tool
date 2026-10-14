@@ -218,17 +218,15 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 </div>
 <div id="ctx" class="menu"></div>
 <div id="breathPop" class="pop"><label><input id="brOn" type="checkbox">入れる</label><span>周期</span><input id="brPeriod" type="number" min="0.5" max="60" step="0.5"><span>秒</span><span>強さ</span><input id="brAmp" type="number" min="0" max="500" step="10"><span>%</span><span id="brNote" style="color:var(--dim)"></span></div>
-<div id="natPop" class="pop col">
+<div id="natPop" class="pop col" title="再生と保存のときだけ有効">
   <label><input id="naFoot" type="checkbox">足のすべり止め</label>
   <label><input id="naCom" type="checkbox">重心を足の上に</label>
   <label><input id="naAir" type="checkbox">空中は放物線</label>
   <div class="prow"><label><input id="naLag" type="checkbox">遅れ</label><span>強さ</span><input id="naLagAmt" type="number" min="0" max="300" step="10"><span>%</span></div>
-  <div class="prow" style="color:var(--dim)">再生と保存のときだけ効く</div>
 </div>
-<div id="ikPop" class="pop col">
+<div id="ikPop" class="pop col" title="固定したIKは、体を動かしてもその場に残る">
   <div class="prow"><button id="ikAllShow">全部出す</button><button id="ikAllHide">全部しまう</button><button id="ikUnpin">固定を全部外す</button></div>
   <div id="ikRows"></div>
-  <div class="prow" style="color:var(--dim)">固定したIKは、体を動かしてもその場に残る（赤い印）</div>
 </div>
 <div id="pairPop" class="pop col">
   <div class="prow"><span id="paName" style="color:var(--dim)"></span><span style="flex:1"></span><button id="paSwap" title="動かすほうを入れ替える（キーを打てるのは動かしているほうだけ）">⇄ 入れ替え</button></div>
@@ -803,7 +801,7 @@ function setModel(group, name, info = null, into = null) {
   $('empty').style.display = 'none';
   S.sel = null;
   goFrame(S.frame);
-  setStatus(`${name}  骨${bones.length}本、` + (generic ? '人型でないモデル（骨を回して作る。IK・手パッド・呼吸・上限は使えない）'
+  setStatus(`${name}  骨${bones.length}本、` + (generic ? '人型でないモデル（IK・手パッド・呼吸・上限は使用できない）'
     : `人型${M.humanSet.size}本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は${axesFrom}` : '')));
 }
 
@@ -4531,7 +4529,7 @@ function startContactPick() {
   if (!M || !P.M) return;
   const sel = S.sel;
   const what = sel?.kind === 'ik' || sel?.kind === 'pole' ? { limb: sel.limb } : sel?.kind === 'hips' ? { bone: M.hips } : sel?.kind === 'bone' && hasPos(sel.i) ? { bone: sel.i } : null;
-  if (!what) { setStatus('先に、IKの手先・足先か、腰（ルート）を選んでください', true); return; }
+  if (!what) { setStatus('IKの手先・足先か、腰（ルート）を選んでください', true); return; }
   if (P.lock) { setStatus('相手役がロックされています', true); return; }
   S.contactPick = what;
   // 手先のギズモが、ちょうどクリックしたい所に重なるので外しておく
@@ -4549,7 +4547,7 @@ function pickContact() {
   const other = P.M.meshes.filter(m => m.visible);
   for (const m of other) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
   const h = P.show && !P.lock ? raycaster.intersectObjects(other, false)[0] : null;
-  if (!h) { setStatus('相手の体に当たりませんでした。もう一度「選んだ手足・腰 → 相手の体…」から', true); return; }
+  if (!h) { setStatus('相手の体に当たりませんでした', true); return; }
   const bone = asPair(() => boneAtHit(h));
   if (bone < 0) { setStatus('相手の骨が見つかりませんでした', true); return; }
   // 今のフレームの、相手の骨と手先・足先の関係を覚える
@@ -4561,7 +4559,7 @@ function pickContact() {
   if (keys.length > 1) { contact.from = Math.min(S.frame, keys[0]); contact.to = Math.max(S.frame, keys[keys.length - 1]); }
   refreshContactUI();
   openPairPop();
-  setStatus(`${whatLabel(what)} → 相手の ${P.M.names[bone]}。範囲を決めて「キーを打つ」`);
+  setStatus(`${whatLabel(what)} → 相手の ${P.M.names[bone]}`);
 }
 
 function refreshContactUI() {
@@ -4586,7 +4584,7 @@ function startLook() {
   contact = { look: true, from: 0, to: D.frameCount, step: 1, model: P.M, me: M };
   if (keys.length > 1) { contact.from = keys[0]; contact.to = keys[keys.length - 1]; }
   refreshContactUI();
-  setStatus('視線を相手の顔へ。範囲を決めて「キーを打つ」');
+  setStatus('視線を相手の顔へ');
 }
 
 /** フレームの並び: from〜to の step ごと（to は必ず） */
@@ -6666,7 +6664,7 @@ $('bHand').onclick = () => {
   S.handPad = !S.handPad;
   try { localStorage.setItem('mt.handPad', S.handPad ? '1' : '0'); } catch (e) { /* 覚えられなくてもいい */ }
   updateButtons();
-  if (S.handPad && !handSideOfSel()) setStatus('手首か指を選ぶと、手のパッドが出ます');
+  if (S.handPad && !handSideOfSel()) setStatus('手首か指を選んでください');
 };
 
 refreshBreathUI();
