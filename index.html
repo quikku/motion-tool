@@ -4529,7 +4529,7 @@ function startContactPick() {
   if (!M || !P.M) return;
   const sel = S.sel;
   const what = sel?.kind === 'ik' || sel?.kind === 'pole' ? { limb: sel.limb } : sel?.kind === 'hips' ? { bone: M.hips } : sel?.kind === 'bone' && hasPos(sel.i) ? { bone: sel.i } : null;
-  if (!what) { setStatus('先に、IKの手先・足先か、腰（ルート）を選んでください', true); return; }
+  if (!what) { setStatus('IKの手先・足先か、腰（ルート）を選んでください', true); return; }
   if (P.lock) { setStatus('相手役がロックされています', true); return; }
   S.contactPick = what;
   // 手先のギズモが、ちょうどクリックしたい所に重なるので外しておく
@@ -4547,7 +4547,7 @@ function pickContact() {
   const other = P.M.meshes.filter(m => m.visible);
   for (const m of other) if (m.isSkinnedMesh) { m.boundingSphere = null; m.boundingBox = null; }
   const h = P.show && !P.lock ? raycaster.intersectObjects(other, false)[0] : null;
-  if (!h) { setStatus('相手の体に当たりませんでした。もう一度「選んだ手足・腰 → 相手の体…」から', true); return; }
+  if (!h) { setStatus('相手の体に当たりませんでした', true); return; }
   const bone = asPair(() => boneAtHit(h));
   if (bone < 0) { setStatus('相手の骨が見つかりませんでした', true); return; }
   // 今のフレームの、相手の骨と手先・足先の関係を覚える
@@ -4559,7 +4559,7 @@ function pickContact() {
   if (keys.length > 1) { contact.from = Math.min(S.frame, keys[0]); contact.to = Math.max(S.frame, keys[keys.length - 1]); }
   refreshContactUI();
   openPairPop();
-  setStatus(`${whatLabel(what)} → 相手の ${P.M.names[bone]}。範囲を決めて「キーを打つ」`);
+  setStatus(`${whatLabel(what)} → 相手の ${P.M.names[bone]}`);
 }
 
 function refreshContactUI() {
@@ -4584,7 +4584,7 @@ function startLook() {
   contact = { look: true, from: 0, to: D.frameCount, step: 1, model: P.M, me: M };
   if (keys.length > 1) { contact.from = keys[0]; contact.to = keys[keys.length - 1]; }
   refreshContactUI();
-  setStatus('視線を相手の顔へ。範囲を決めて「キーを打つ」');
+  setStatus('視線を相手の顔へ');
 }
 
 /** フレームの並び: from〜to の step ごと（to は必ず） */
@@ -6664,7 +6664,7 @@ $('bHand').onclick = () => {
   S.handPad = !S.handPad;
   try { localStorage.setItem('mt.handPad', S.handPad ? '1' : '0'); } catch (e) { /* 覚えられなくてもいい */ }
   updateButtons();
-  if (S.handPad && !handSideOfSel()) setStatus('手首か指を選ぶと、手のパッドが出ます');
+  if (S.handPad && !handSideOfSel()) setStatus('手首か指を選んでください');
 };
 
 refreshBreathUI();
