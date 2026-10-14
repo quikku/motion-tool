@@ -218,13 +218,13 @@ label { display: inline-flex; align-items: center; color: var(--text); }
 </div>
 <div id="ctx" class="menu"></div>
 <div id="breathPop" class="pop"><label><input id="brOn" type="checkbox">入れる</label><span>周期</span><input id="brPeriod" type="number" min="0.5" max="60" step="0.5"><span>秒</span><span>強さ</span><input id="brAmp" type="number" min="0" max="500" step="10"><span>%</span><span id="brNote" style="color:var(--dim)"></span></div>
-<div id="natPop" class="pop col" title="再生と保存のときだけ効く">
+<div id="natPop" class="pop col" title="再生と保存のときだけ有効">
   <label><input id="naFoot" type="checkbox">足のすべり止め</label>
   <label><input id="naCom" type="checkbox">重心を足の上に</label>
   <label><input id="naAir" type="checkbox">空中は放物線</label>
   <div class="prow"><label><input id="naLag" type="checkbox">遅れ</label><span>強さ</span><input id="naLagAmt" type="number" min="0" max="300" step="10"><span>%</span></div>
 </div>
-<div id="ikPop" class="pop col" title="固定したIKは、体を動かしてもその場に残る（赤い印）">
+<div id="ikPop" class="pop col" title="固定したIKは、体を動かしてもその場に残る">
   <div class="prow"><button id="ikAllShow">全部出す</button><button id="ikAllHide">全部しまう</button><button id="ikUnpin">固定を全部外す</button></div>
   <div id="ikRows"></div>
 </div>
@@ -801,7 +801,7 @@ function setModel(group, name, info = null, into = null) {
   $('empty').style.display = 'none';
   S.sel = null;
   goFrame(S.frame);
-  setStatus(`${name}  骨${bones.length}本、` + (generic ? '人型でないモデル（骨を回して作る。IK・手パッド・呼吸・上限は使えない）'
+  setStatus(`${name}  骨${bones.length}本、` + (generic ? '人型でないモデル（IK・手パッド・呼吸・上限は使用できない）'
     : `人型${M.humanSet.size}本（${M.humanFrom}）` + (axesFrom ? `、関節の軸は${axesFrom}` : '')));
 }
 
