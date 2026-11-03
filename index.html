@@ -499,7 +499,8 @@ function addParts(parts, bufs, quiet = false) {
   const saved = savePose();
   applyRest();
   const nodes = parts.nodes.map(nd => {
-    const bone = M.bones[(nd.driver ? M.byName.get(nd.driver) : null) ?? M.hips];
+    // '#scene' はアバターの外の物（家具など）。骨に付けず、モデルの根に置いたまま動かさない
+    const bone = nd.driver === '#scene' ? M.root : M.bones[(nd.driver ? M.byName.get(nd.driver) : null) ?? M.hips];
     const o = new THREE.Object3D();
     o.name = nd.name;
     o.matrixAutoUpdate = false;
