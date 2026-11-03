@@ -3948,6 +3948,7 @@ function buildAnim(name) {
 /**
  * Unityから開いたときの保存。Unityが.animにして、プロジェクトに置く。
  * 編集用のデータ（骨ごとのキー）も渡す。Unityが.animと一緒に覚えておき、次に開くときに返してくる。
+ * .sismotion の中身も渡す。.anim の隣に同じ名前の .sismotion があれば、Unity が一緒に書き換える（別のアバターで開くときに使う）。
  */
 async function saveToUnity(as) {
   let path = S.unity.path;
@@ -3960,7 +3961,7 @@ async function saveToUnity(as) {
   for (const k of ['poses', 'shapeCurves', 'restBones', 'rest', 'human', 'axes', 'twist', 'unityRest', 'zeroPose']) delete edit[k];
   const post = async overwrite => {
     // Unity の別のタブから出した相手役は、そのタブ（そのアバター）の Unity に保存させる
-    const r = await fetch((S.src?.base || '') + 'unity/save', { method: 'POST', body: JSON.stringify({ path, overwrite, motion: JSON.stringify(file), edit: JSON.stringify(edit) }) });
+    const r = await fetch((S.src?.base || '') + 'unity/save', { method: 'POST', body: JSON.stringify({ path, overwrite, motion: JSON.stringify(file), edit: JSON.stringify(edit), project: JSON.stringify(docData()) }) });
     return r.json();
   };
   let res;
@@ -6917,7 +6918,17 @@ async function openFromUnity(man) {
     const r = await fetch(man.motion);
     if (!r.ok) return;
     const name = man.anim.replace(/^.*\//, '').replace(/\.anim$/i, '');
-    applyMotionJson(await r.json(), name + '.motion.json', null);
+    const obj = await r.json();
+    // 別のモデルで作った動きは、Unity が隣の .sismotion を渡してくる（人型で写し替えて開く）
+    if (obj?.format === PROJECT_FORMAT) {
+      const missing = applyProject({ ...obj, frame: 0, name });
+      S.unity.path = man.anim;
+      S.dirty = false;
+      updateTitle();
+      setStatus(`開いた: ${name}.anim  ${obj.model} で作った動きを人型で写した` + (missing ? `  このモデルに無い骨・シェイプ ${missing}個` : ''), missing > 0);
+      return;
+    }
+    applyMotionJson(obj, name + '.motion.json', null);
     S.unity.path = man.anim;
     setStatus($('status').textContent.replace(name + '.motion.json', name + '.anim'), $('status').classList.contains('err'));
   } catch (e) {
