@@ -170,7 +170,7 @@ label { display: inline-flex; align-items: center; color: var(--text); }
     <button id="bPair" title="2人目のアバター（相手役）を出して、同じタイムラインで一緒に再生する">相手 ▾</button>
     <button id="bWho" title="動かすほうを入れ替える（ロックを外していれば、相手役の体のクリックでも入れ替わる）" style="display:none"></button>
     <button id="bPairShow" title="相手役を出す / 隠す" style="display:none">相手を表示</button>
-    <button id="bSettings" title="マウスとキーの割り当て">設定</button>
+    <button id="bSettings" title="マウスとキーの割り当て・保存のしかた">設定</button>
     <button id="bHelp">?</button>
     <span id="status"></span>
   </div>
@@ -348,7 +348,7 @@ const S = {
 };
 
 /** 更新されたかを見分けるための日付。ヘルプの下に出る。直したら書き換える */
-const BUILD = '2026-11-14b';
+const BUILD = '2026-11-14d';
 
 function setStatus(text, err = false) {
   const el = $('status');
@@ -3998,7 +3998,9 @@ async function saveToUnity(as) {
 async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
   const err = e => `${e.name}: ${e.message}`;
   let why = null, picked = false;
-  if (window.showSaveFilePicker) {
+  // 普段はダウンロードで保存する。保存先を選ぶ画面は、設定でオンにしたときだけ（Chrome が選んだ場所を受け付けない環境がある）
+  const byDownload = !CFG.savePicker;
+  if (window.showSaveFilePicker && !byDownload) {
     try {
       if (handle && (await handle.queryPermission?.({ mode: 'readwrite' })) === 'prompt'
         && (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') handle = null;
@@ -4043,6 +4045,7 @@ async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
   a.remove();
   // すぐ消すと、大きいファイルのダウンロードが途中で失敗するブラウザがある
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  if (byDownload) return { ...out, handle: null, name, byDownload: true };
   return { ...out, handle: null, name, downloaded: why || '保存先を選ぶ画面が無いブラウザ' };
 }
 
@@ -4051,13 +4054,14 @@ async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
  * ダウンロードにしたときは、本当に保存されたかわからないので「保存した」とは扱わない（理由を先に出す。後ろは切れて見えないので）
  */
 function reportWrite(res, what) {
-  if (res.aborted) { setStatus(`保存をやめました（${res.aborted}）`); return false; }
+  // Chrome は、選んだ場所にファイルを作れないときも「やめた」と同じ AbortError を返す
+  if (res.aborted) { setStatus(`保存をやめました（${res.aborted}）。保存先を選んだのにこうなるときは、設定の「保存先を選んで保存」をオフにしてください`); return false; }
   if (res.error) { setStatus(res.error, true); return false; }
   if (res.downloaded) {
     setStatus(`${res.downloaded} → ダウンロードのフォルダに ${res.name} を保存しました`, !!window.showSaveFilePicker);
     return false;
   }
-  setStatus(`${what}: ${res.name}` + (res.bytes ? `（${Math.round(res.bytes / 1024)} KB）` : ''));
+  setStatus(`${what}: ${res.name}` + (res.bytes ? `（${Math.round(res.bytes / 1024)} KB）` : '') + (res.byDownload ? '（ダウンロード）' : ''));
   return true;
 }
 
@@ -5259,7 +5263,7 @@ const MOUSE_PRESETS = [
 ];
 
 function defaultSettings() {
-  return { mouse: JSON.parse(JSON.stringify(MOUSE_PRESETS[0][1])), keys: Object.fromEntries(ACTIONS.map(a => [a[0], a[2]])) };
+  return { mouse: JSON.parse(JSON.stringify(MOUSE_PRESETS[0][1])), keys: Object.fromEntries(ACTIONS.map(a => [a[0], a[2]])), savePicker: false };
 }
 function loadSettings() {
   const cfg = defaultSettings();
@@ -5267,6 +5271,7 @@ function loadSettings() {
     const saved = JSON.parse(localStorage.getItem('motiontool.settings') || 'null');
     if (saved?.mouse) for (const [id] of MOUSE_ACTIONS) if (id in saved.mouse) cfg.mouse[id] = saved.mouse[id];
     if (saved?.keys) for (const a of ACTIONS) if (typeof saved.keys[a[0]] === 'string') cfg.keys[a[0]] = saved.keys[a[0]];
+    if (typeof saved?.savePicker === 'boolean') cfg.savePicker = saved.savePicker;
   } catch (e) { /* 壊れていたら初期設定 */ }
   return cfg;
 }
@@ -5364,6 +5369,20 @@ function renderSettings() {
     body.appendChild(row);
   }
   body.appendChild(el('div', 'note', 'クリックで選ぶ、右クリックでメッシュを隠す、ホイールで寄る、は固定'));
+
+  if (window.showSaveFilePicker && !S.unity) {
+    body.appendChild(el('h4', null, '保存'));
+    const row = el('div', 'setrow');
+    const lab = el('label');
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = !!CFG.savePicker;
+    cb.onchange = () => { CFG.savePicker = cb.checked; saveSettings(); };
+    lab.append(cb, '保存先を選んで保存');
+    row.appendChild(lab);
+    body.appendChild(row);
+    body.appendChild(el('div', 'note', 'オフ: ダウンロードで保存する（保存先はブラウザのダウンロードの設定に従う。Chrome の「ダウンロード前に各ファイルの保存場所を確認する」をオンにすると、毎回選べる）。オン: 保存先を選んで、2回目からは同じファイルに上書きする（環境によっては、選んだ場所に保存されない）'));
+  }
 
   body.appendChild(el('h4', null, 'キー'));
   const grid = el('div', 'keygrid');
