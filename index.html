@@ -3991,6 +3991,7 @@ async function saveToUnity(as) {
  * handle: 前に選んだ保存先（上書き保存）。null なら選ばせる。返り値: { handle, name, ...make() の返り値 }、やめたら null
  */
 async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
+  let why = null;
   if (window.showSaveFilePicker) {
     try {
       if (handle && (await handle.queryPermission?.({ mode: 'readwrite' })) === 'prompt'
@@ -4000,6 +4001,7 @@ async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
       if (e.name === 'AbortError') return null;
       // 選ぶ画面が出せないとき（時間切れなど）は、ダウンロードで保存する
       handle = null;
+      why = `${e.name}: ${e.message}`;
     }
   }
   const out = await make();
@@ -4014,6 +4016,7 @@ async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
     } catch (e) {
       try { await w?.abort(); } catch (e2) { /* 閉じられなくてもいい */ }
       console.warn('ファイルに書けないので、ダウンロードで保存する', e);
+      why = `${handle.name} に書けません（${e.name}: ${e.message}）`;
     }
   }
   const a = document.createElement('a');
@@ -4025,8 +4028,11 @@ async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
   a.remove();
   // すぐ消すと、大きいファイルのダウンロードが途中で失敗するブラウザがある
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-  return { ...out, handle: null, name: suggestedName, downloaded: true };
+  return { ...out, handle: null, name: suggestedName, downloaded: why || '保存先を選ぶ画面が無いブラウザ' };
 }
+
+/** 選んだ場所に書けず、ダウンロードにしたときの一言（なぜ書けなかったかも出す） */
+const downloadedNote = res => (res.downloaded ? `  ダウンロードのフォルダに保存しました（${res.downloaded}）` : '');
 
 /** 茜犬の見本の保存。Unity を通さずに、ブラウザが .anim を書く */
 async function saveAnim(as) {
@@ -4043,7 +4049,7 @@ async function saveAnim(as) {
     D.name = res.name.replace(/\.anim$/i, '');
     S.dirty = false;
     updateTitle();
-    setStatus(`保存: ${res.name}（${Math.round(res.bytes / 1024)} KB）` + (res.downloaded ? '  ダウンロードのフォルダに保存しました' : ''));
+    setStatus(`保存: ${res.name}（${Math.round(res.bytes / 1024)} KB）` + downloadedNote(res), !!res.downloaded && !!window.showSaveFilePicker);
   } catch (e) {
     setStatus('保存できません: ' + e.message, true);
   }
@@ -4213,7 +4219,7 @@ async function saveProject() {
       make: () => ({ text: JSON.stringify(projectData()) }),
     });
     if (!res) return;
-    setStatus(`プロジェクトを保存: ${res.name}` + (res.downloaded ? '  ダウンロードのフォルダに保存しました' : ''));
+    setStatus(`プロジェクトを保存: ${res.name}` + downloadedNote(res), !!res.downloaded && !!window.showSaveFilePicker);
   } catch (e) {
     setStatus('保存できません: ' + e.message, true);
   }
