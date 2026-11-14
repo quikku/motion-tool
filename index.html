@@ -3984,34 +3984,68 @@ async function saveToUnity(as) {
   setStatus(`保存: ${res.path}` + (res.message ? '  ' + res.message : ''));
 }
 
+/**
+ * ブラウザでファイルに書く。
+ * 保存先を選ぶ画面は、クリック・キーを押した直後でないと出せない（数秒で切れる）。中身を作るのに時間がかかると
+ * 「保存できません」になるので、先に保存先を決めてから make() で中身を作る。
+ * handle: 前に選んだ保存先（上書き保存）。null なら選ばせる。返り値: { handle, name, ...make() の返り値 }、やめたら null
+ */
+async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
+  if (window.showSaveFilePicker) {
+    try {
+      if (handle && (await handle.queryPermission?.({ mode: 'readwrite' })) === 'prompt'
+        && (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') handle = null;
+      if (!handle) handle = await window.showSaveFilePicker({ suggestedName, types });
+    } catch (e) {
+      if (e.name === 'AbortError') return null;
+      // 選ぶ画面が出せないとき（時間切れなど）は、ダウンロードで保存する
+      handle = null;
+    }
+  }
+  const out = await make();
+  if (out.error) return out;
+  if (handle) {
+    let w;
+    try {
+      w = await handle.createWritable();
+      await w.write(out.text);
+      await w.close();
+      return { ...out, handle, name: handle.name };
+    } catch (e) {
+      try { await w?.abort(); } catch (e2) { /* 閉じられなくてもいい */ }
+      console.warn('ファイルに書けないので、ダウンロードで保存する', e);
+    }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([out.text], { type: mime }));
+  a.download = suggestedName;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // すぐ消すと、大きいファイルのダウンロードが途中で失敗するブラウザがある
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  return { ...out, handle: null, name: suggestedName, downloaded: true };
+}
+
 /** 茜犬の見本の保存。Unity を通さずに、ブラウザが .anim を書く */
 async function saveAnim(as) {
   const base = (D.name || 'NewMotion').replace(/\.anim$/i, '');
-  const built = buildAnim(base);
-  if (built.error) { setStatus(built.error, true); return; }
   try {
-    let name;
-    if (window.showSaveFilePicker) {
-      if (as || !S.animHandle) {
-        S.animHandle = await window.showSaveFilePicker({ suggestedName: `${base}.anim`, types: [{ description: 'Unity AnimationClip', accept: { 'application/octet-stream': ['.anim'] } }] });
-      }
-      const w = await S.animHandle.createWritable();
-      await w.write(built.text);
-      await w.close();
-      name = S.animHandle.name;
-    } else {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([built.text], { type: 'application/octet-stream' }));
-      a.download = name = `${base}.anim`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    }
-    D.name = name.replace(/\.anim$/i, '');
+    const res = await writeFileBrowser({
+      handle: as ? null : S.animHandle, suggestedName: `${base}.anim`, mime: 'application/octet-stream',
+      types: [{ description: 'Unity AnimationClip', accept: { 'application/octet-stream': ['.anim'] } }],
+      make: () => buildAnim(base),
+    });
+    if (!res) return;
+    if (res.error) { setStatus(res.error, true); return; }
+    S.animHandle = res.handle;
+    D.name = res.name.replace(/\.anim$/i, '');
     S.dirty = false;
     updateTitle();
-    setStatus(`保存: ${name}（${Math.round(built.bytes / 1024)} KB）`);
+    setStatus(`保存: ${res.name}（${Math.round(res.bytes / 1024)} KB）` + (res.downloaded ? '  ダウンロードのフォルダに保存しました' : ''));
   } catch (e) {
-    if (e.name !== 'AbortError') setStatus('保存できません: ' + e.message, true);
+    setStatus('保存できません: ' + e.message, true);
   }
 }
 
@@ -4171,27 +4205,17 @@ function applyProject(obj) {
 
 async function saveProject() {
   if (!M) return;
-  const data = projectData();
-  const text = JSON.stringify(data);
-  const base = (data.name || 'NewMotion').replace(/\.(anim|sismotion)$/i, '');
+  const base = (D.name || 'NewMotion').replace(/\.(anim|sismotion)$/i, '');
   try {
-    let name;
-    if (window.showSaveFilePicker) {
-      const h = await window.showSaveFilePicker({ suggestedName: `${base}.sismotion`, types: [{ description: 'SisMotionTooL プロジェクト', accept: { 'application/json': ['.sismotion'] } }] });
-      const w = await h.createWritable();
-      await w.write(text);
-      await w.close();
-      name = h.name;
-    } else {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-      a.download = name = `${base}.sismotion`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    }
-    setStatus(`プロジェクトを保存: ${name}`);
+    const res = await writeFileBrowser({
+      handle: null, suggestedName: `${base}.sismotion`, mime: 'application/json',
+      types: [{ description: 'SisMotionTooL プロジェクト', accept: { 'application/json': ['.sismotion'] } }],
+      make: () => ({ text: JSON.stringify(projectData()) }),
+    });
+    if (!res) return;
+    setStatus(`プロジェクトを保存: ${res.name}` + (res.downloaded ? '  ダウンロードのフォルダに保存しました' : ''));
   } catch (e) {
-    if (e.name !== 'AbortError') setStatus('保存できません: ' + e.message, true);
+    setStatus('保存できません: ' + e.message, true);
   }
 }
 
