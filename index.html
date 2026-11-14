@@ -348,7 +348,7 @@ const S = {
 };
 
 /** 更新されたかを見分けるための日付。ヘルプの下に出る。直したら書き換える */
-const BUILD = '2026-11-14d';
+const BUILD = '2026-11-14e';
 
 function setStatus(text, err = false) {
   const el = $('status');
@@ -4000,6 +4000,14 @@ async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
   let why = null, picked = false;
   // 普段はダウンロードで保存する。保存先を選ぶ画面は、設定でオンにしたときだけ（Chrome が選んだ場所を受け付けない環境がある）
   const byDownload = !CFG.savePicker;
+  // ダウンロードで保存するときは、名前だけ聞く（保存先はブラウザが決める）
+  if (byDownload || !window.showSaveFilePicker) {
+    const ext = suggestedName.match(/\.[^.]+$/)?.[0] || '';
+    const typed = await ask('ファイル名', suggestedName.slice(0, suggestedName.length - ext.length));
+    if (!typed) return { aborted: null };
+    const bare = typed.replace(/[\\/:*?"<>|]/g, '_').replace(new RegExp(ext.replace('.', '\\.') + '$', 'i'), '');
+    suggestedName = bare + ext;
+  }
   if (window.showSaveFilePicker && !byDownload) {
     try {
       if (handle && (await handle.queryPermission?.({ mode: 'readwrite' })) === 'prompt'
@@ -4055,6 +4063,7 @@ async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
  */
 function reportWrite(res, what) {
   // Chrome は、選んだ場所にファイルを作れないときも「やめた」と同じ AbortError を返す
+  if (res.aborted === null) { setStatus('保存をやめました'); return false; }
   if (res.aborted) { setStatus(`保存をやめました（${res.aborted}）。保存先を選んだのにこうなるときは、設定の「保存先を選んで保存」をオフにしてください`); return false; }
   if (res.error) { setStatus(res.error, true); return false; }
   if (res.downloaded) {
@@ -4081,7 +4090,7 @@ async function saveAnim(as) {
     types: [{ description: 'Unity AnimationClip', accept: { 'application/octet-stream': ['.anim'] } }],
     make: () => buildAnim(base),
   });
-  if (res.aborted || res.error) { reportWrite(res); return; }
+  if ('aborted' in res || res.error) { reportWrite(res); return; }
   S.animHandle = res.handle;
   D.name = res.name.replace(/\.anim$/i, '');
   if (reportWrite(res, '保存')) S.dirty = false;
