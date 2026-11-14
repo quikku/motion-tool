@@ -347,6 +347,9 @@ const S = {
   src: null,
 };
 
+/** 更新されたかを見分けるための日付。ヘルプの下に出る。直したら書き換える */
+const BUILD = '2026-11-14b';
+
 function setStatus(text, err = false) {
   const el = $('status');
   el.textContent = text || '';
@@ -3988,78 +3991,104 @@ async function saveToUnity(as) {
  * ブラウザでファイルに書く。
  * 保存先を選ぶ画面は、クリック・キーを押した直後でないと出せない（数秒で切れる）。中身を作るのに時間がかかると
  * 「保存できません」になるので、先に保存先を決めてから make() で中身を作る。
- * handle: 前に選んだ保存先（上書き保存）。null なら選ばせる。返り値: { handle, name, ...make() の返り値 }、やめたら null
+ * handle: 前に選んだ保存先（上書き保存）。null なら選ばせる。
+ * 返り値: { handle, name, ...make() の返り値 }。downloaded: ダウンロードにした理由、aborted: やめた理由、error: 保存できなかった理由
+ * どの道を通ったかが必ずステータスに出るようにする（黙って終わると、何が起きたかわからない）
  */
 async function writeFileBrowser({ handle, suggestedName, types, mime, make }) {
-  let why = null;
+  const err = e => `${e.name}: ${e.message}`;
+  let why = null, picked = false;
   if (window.showSaveFilePicker) {
     try {
       if (handle && (await handle.queryPermission?.({ mode: 'readwrite' })) === 'prompt'
         && (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') handle = null;
-      if (!handle) handle = await window.showSaveFilePicker({ suggestedName, types });
+      if (!handle) { handle = await window.showSaveFilePicker({ suggestedName, types }); picked = true; }
     } catch (e) {
-      if (e.name === 'AbortError') return null;
-      // 選ぶ画面が出せないとき（時間切れなど）は、ダウンロードで保存する
+      console.warn('保存先を選べませんでした', e);
+      if (e.name === 'AbortError') return { aborted: err(e) };
+      // 時間切れ（SecurityError）だけはダウンロードで保存する。ほかは理由を出して止める（画面が開いたままのときなど）
+      if (e.name !== 'SecurityError') return { error: '保存できません: ' + err(e) };
       handle = null;
-      why = `${e.name}: ${e.message}`;
+      why = '保存先を選ぶ画面が出せません（' + err(e) + '）';
     }
   }
-  const out = await make();
-  if (out.error) return out;
+  // 選んだ時点で Chrome は空のファイルを作る。書けなかったら消す（前からあったファイルは消さない）
+  const dropEmpty = async () => { if (picked) try { await handle.remove?.(); } catch (e) { /* 消せなくてもいい */ } };
+  let out;
+  try { out = await make(); } catch (e) { await dropEmpty(); throw e; }
+  if (out.error) { await dropEmpty(); return out; }
+  let name = suggestedName;
   if (handle) {
     let w;
     try {
       w = await handle.createWritable();
       await w.write(out.text);
       await w.close();
+      console.info('保存しました', handle.name);
       return { ...out, handle, name: handle.name };
     } catch (e) {
       try { await w?.abort(); } catch (e2) { /* 閉じられなくてもいい */ }
       console.warn('ファイルに書けないので、ダウンロードで保存する', e);
-      why = `${handle.name} に書けません（${e.name}: ${e.message}）`;
+      await dropEmpty();
+      name = handle.name;
+      why = `選んだ場所の ${handle.name} に書けません（${err(e)}）`;
     }
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([out.text], { type: mime }));
-  a.download = suggestedName;
+  a.download = name;
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
   a.remove();
   // すぐ消すと、大きいファイルのダウンロードが途中で失敗するブラウザがある
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-  return { ...out, handle: null, name: suggestedName, downloaded: why || '保存先を選ぶ画面が無いブラウザ' };
+  return { ...out, handle: null, name, downloaded: why || '保存先を選ぶ画面が無いブラウザ' };
 }
 
-/** 選んだ場所に書けず、ダウンロードにしたときの一言（なぜ書けなかったかも出す） */
-const downloadedNote = res => (res.downloaded ? `  ダウンロードのフォルダに保存しました（${res.downloaded}）` : '');
+/**
+ * writeFileBrowser の結果をステータスに出す。保存できたら true。
+ * ダウンロードにしたときは、本当に保存されたかわからないので「保存した」とは扱わない（理由を先に出す。後ろは切れて見えないので）
+ */
+function reportWrite(res, what) {
+  if (res.aborted) { setStatus(`保存をやめました（${res.aborted}）`); return false; }
+  if (res.error) { setStatus(res.error, true); return false; }
+  if (res.downloaded) {
+    setStatus(`${res.downloaded} → ダウンロードのフォルダに ${res.name} を保存しました`, !!window.showSaveFilePicker);
+    return false;
+  }
+  setStatus(`${what}: ${res.name}` + (res.bytes ? `（${Math.round(res.bytes / 1024)} KB）` : ''));
+  return true;
+}
+
+/** 保存の途中（選ぶ画面・書き込みを待っているあいだ）。二度押しや、そのあいだのアバターの入れ替えを止める */
+let saving = false;
+async function whileSaving(fn) {
+  if (saving) return;
+  saving = true;
+  try { await fn(); } catch (e) { setStatus('保存できません: ' + e.message, true); } finally { saving = false; }
+}
 
 /** 茜犬の見本の保存。Unity を通さずに、ブラウザが .anim を書く */
 async function saveAnim(as) {
   const base = (D.name || 'NewMotion').replace(/\.anim$/i, '');
-  try {
-    const res = await writeFileBrowser({
-      handle: as ? null : S.animHandle, suggestedName: `${base}.anim`, mime: 'application/octet-stream',
-      types: [{ description: 'Unity AnimationClip', accept: { 'application/octet-stream': ['.anim'] } }],
-      make: () => buildAnim(base),
-    });
-    if (!res) return;
-    if (res.error) { setStatus(res.error, true); return; }
-    S.animHandle = res.handle;
-    D.name = res.name.replace(/\.anim$/i, '');
-    S.dirty = false;
-    updateTitle();
-    setStatus(`保存: ${res.name}（${Math.round(res.bytes / 1024)} KB）` + downloadedNote(res), !!res.downloaded && !!window.showSaveFilePicker);
-  } catch (e) {
-    setStatus('保存できません: ' + e.message, true);
-  }
+  const res = await writeFileBrowser({
+    handle: as ? null : S.animHandle, suggestedName: `${base}.anim`, mime: 'application/octet-stream',
+    types: [{ description: 'Unity AnimationClip', accept: { 'application/octet-stream': ['.anim'] } }],
+    make: () => buildAnim(base),
+  });
+  if (res.aborted || res.error) { reportWrite(res); return; }
+  S.animHandle = res.handle;
+  D.name = res.name.replace(/\.anim$/i, '');
+  if (reportWrite(res, '保存')) S.dirty = false;
+  updateTitle();
 }
 
 async function save(as) {
   if (!M) return;
   if (!hasKeys()) { setStatus('キーがありません', true); return; }
-  if (S.sample) await saveAnim(as);
-  else if (S.unity) await saveToUnity(as);
+  if (S.sample) await whileSaving(() => saveAnim(as));
+  else if (S.unity) await whileSaving(() => saveToUnity(as));
 }
 
 // ================================================================
@@ -4211,18 +4240,17 @@ function applyProject(obj) {
 
 async function saveProject() {
   if (!M) return;
-  const base = (D.name || 'NewMotion').replace(/\.(anim|sismotion)$/i, '');
-  try {
+  // 2 体いるときは、1 体目の名前（中身も 1 体目が先）
+  const first = S.second && P.D ? P.D : D;
+  const base = (first.name || 'NewMotion').replace(/\.(anim|sismotion)$/i, '');
+  await whileSaving(async () => {
     const res = await writeFileBrowser({
       handle: null, suggestedName: `${base}.sismotion`, mime: 'application/json',
       types: [{ description: 'SisMotionTooL プロジェクト', accept: { 'application/json': ['.sismotion'] } }],
       make: () => ({ text: JSON.stringify(projectData()) }),
     });
-    if (!res) return;
-    setStatus(`プロジェクトを保存: ${res.name}` + downloadedNote(res), !!res.downloaded && !!window.showSaveFilePicker);
-  } catch (e) {
-    setStatus('保存できません: ' + e.message, true);
-  }
+    reportWrite(res, 'プロジェクトを保存');
+  });
 }
 
 async function openProjectFile(file) {
@@ -4475,6 +4503,7 @@ function swapArrays(a, b) {
  * 動かすほうを入れ替える。もう 1 体が原点に来るので、カメラも同じだけ動かして見た目をそのままにする
  */
 function switchActor() {
+  if (saving) return;
   if (!M || !P.M) return;
   if (S.playing) stopPlay();
   gizmo.detach();
@@ -5433,7 +5462,8 @@ function renderHelp() {
   $('helpNote').textContent = (S.sample ? '「.anim保存」で、Unityで使える.animができる（茜犬の見本。ほかのアバターはUnityのスクリプトで）' : '「.anim保存」で、Unityのプロジェクトに.animができる') +
     '。「プロジェクト保存」で.sismotionに残せる' +
     (M?.generic ? '。人型でないモデルは、骨を回して作る（' + (EXPERIMENTAL ? '脚と頭のIKは試験的。' : 'IK・') + '手パッド・呼吸・上限は使えない。位置を動かせるのは、ルートと、ルートのすぐ下の骨）' : '') +
-    (!EXPERIMENTAL ? '' : '。「相手」で2人目のアバターを出して一緒に再生できる。Qで動かすほうが入れ替わる。相手役は最初ロックされていて、クリックで触れない（「相手」のロックを外すと、相手の体のクリックで入れ替わり、「くっつける」が使える）。「補正」は足のすべり・重心・空中・遅れを直す（再生と保存のときだけ）');
+    (!EXPERIMENTAL ? '' : '。「相手」で2人目のアバターを出して一緒に再生できる。Qで動かすほうが入れ替わる。相手役は最初ロックされていて、クリックで触れない（「相手」のロックを外すと、相手の体のクリックで入れ替わり、「くっつける」が使える）。「補正」は足のすべり・重心・空中・遅れを直す（再生と保存のときだけ）')
+    + `。（${BUILD} 版）`;
 }
 
 // Ctrl+S などは、画面（ヘルプ・設定・入力欄）が開いていても、ブラウザの「ページを保存」に渡さない。
@@ -5441,8 +5471,10 @@ function renderHelp() {
 window.addEventListener('keydown', e => {
   if (keyCapture) return;
   const id = keyToAction.get(comboOf(e));
+  const mod = e.ctrlKey || e.metaKey || e.altKey;
   const browserSave = (e.ctrlKey || e.metaKey) && e.code === 'KeyS';
-  if (browserSave || (id && WHILE_TYPING.has(id))) e.preventDefault();
+  // 修飾キーの無い割り当て（S だけなど）は、文字を打つのを止めない
+  if (browserSave || (id && WHILE_TYPING.has(id) && mod)) e.preventDefault();
 }, true);
 window.addEventListener('keydown', e => {
   // キーの割り当て待ち
@@ -5470,9 +5502,12 @@ window.addEventListener('keydown', e => {
     if (modal === 'settings') { closeSettings(); return; }
   }
   const id = keyToAction.get(comboOf(e));
-  // 保存・開くは、ヘルプや設定を開いたままでも効く（名前を聞いている最中だけはやめる）
-  if (!id || (modal && !(WHILE_TYPING.has(id) && modal !== 'ask'))) return;
-  if (typing && !WHILE_TYPING.has(id)) return;
+  // 保存・開くは、ヘルプや設定を開いたままでも、文字を打つ欄でも、Ctrl などと一緒なら効く（名前を聞いている最中だけはやめる）
+  const anywhere = WHILE_TYPING.has(id) && (e.ctrlKey || e.metaKey || e.altKey);
+  if (!id || (modal && !(anywhere && modal !== 'ask'))) return;
+  if (typing && !anywhere) return;
+  // 押しっぱなしで何度も保存しない
+  if (e.repeat && WHILE_TYPING.has(id)) { e.preventDefault(); return; }
   e.preventDefault();
   RUN[id]();
 });
