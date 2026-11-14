@@ -5436,6 +5436,14 @@ function renderHelp() {
     (!EXPERIMENTAL ? '' : '。「相手」で2人目のアバターを出して一緒に再生できる。Qで動かすほうが入れ替わる。相手役は最初ロックされていて、クリックで触れない（「相手」のロックを外すと、相手の体のクリックで入れ替わり、「くっつける」が使える）。「補正」は足のすべり・重心・空中・遅れを直す（再生と保存のときだけ）');
 }
 
+// Ctrl+S などは、画面（ヘルプ・設定・入力欄）が開いていても、ブラウザの「ページを保存」に渡さない。
+// 渡すと、デスクトップなどを選んでも .anim ではなくページが保存される
+window.addEventListener('keydown', e => {
+  if (keyCapture) return;
+  const id = keyToAction.get(comboOf(e));
+  const browserSave = (e.ctrlKey || e.metaKey) && e.code === 'KeyS';
+  if (browserSave || (id && WHILE_TYPING.has(id))) e.preventDefault();
+}, true);
 window.addEventListener('keydown', e => {
   // キーの割り当て待ち
   if (keyCapture) {
@@ -5462,7 +5470,8 @@ window.addEventListener('keydown', e => {
     if (modal === 'settings') { closeSettings(); return; }
   }
   const id = keyToAction.get(comboOf(e));
-  if (!id || modal) return;
+  // 保存・開くは、ヘルプや設定を開いたままでも効く（名前を聞いている最中だけはやめる）
+  if (!id || (modal && !(WHILE_TYPING.has(id) && modal !== 'ask'))) return;
   if (typing && !WHILE_TYPING.has(id)) return;
   e.preventDefault();
   RUN[id]();
